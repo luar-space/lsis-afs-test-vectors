@@ -1,0 +1,38 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync project
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Format check
+        run: uv run ruff format --check
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: check-annex3 (normative oracle)
+        run: uv run lsis-afs-validate check-annex3
+
+      - name: check-lans-afs-sim (second oracle)
+        run: uv run lsis-afs-validate check-lans-afs-sim
+
+      - name: verify-manifest
+        run: uv run lsis-afs-validate verify-manifest

@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Belt-and-braces: no stray PDFs in the repo root, but bundled reference
+# material under references/ is tracked on purpose (interop plan, FAQ, and
+# any future level-specific normative PDFs).
+*.pdf
+!references/*.pdf

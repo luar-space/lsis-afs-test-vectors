@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: "LSIS-AFS Interoperability Test Vectors"
+message: "If you use these vectors in your implementation or publication, please cite."
+type: dataset
+authors:
+  - family-names: Fiscato
+    given-names: Marco
+    affiliation: "LuarSpace"
+keywords:
+  - LSIS-AFS
+  - LunaNet
+  - PNT
+  - spreading-codes
+  - CCSDS
+  - ESA
+  - test-vectors
+  - interoperability
+version: "0.1.0"
+date-released: "2026-04-22"
+license: Apache-2.0
+repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
+abstract: >-
+  Staged interoperability test-vector package for the LSIS-AFS (LunaNet
+  Signal-In-Space Augmented Forward Signal) specification, Version 1.0
+  (29 January 2025). Targets the five test levels defined in the
+  competition interoperability plan, shipped incrementally as drops to
+  the same repository. Version 0.1.0 ships Level 1 (code generation):
+  all 210 PRN spreading codes — Gold (AFS-I primary), Weil 10230 (AFS-Q
+  primary), Weil 1500 (tertiary) and the four AFS-Q secondary codes —
+  in the standardized hex format, bit-exact against LNIS AD1 Volume A
+  Annex 3 (normative reference) and against LANS-AFS-SIM (independent
+  second oracle). Subsequent drops will add Levels 2–5.
