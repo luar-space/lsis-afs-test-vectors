@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lsis-afs-test-vectors"
-version = "0.1.0"
-description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.1.0 ships Level 1 spreading codes bit-exact against LNIS AD1 Volume A Annex 3 and LANS-AFS-SIM."
+version = "0.2.0"
+description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.2.0 ships Level 1 spreading codes (210 PRNs) and Level 2 encoded frames (5 standard test messages + 1 boundary frame), validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), and the LSIS V1.0 §2.4 structural rules. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -37,6 +37,7 @@ Issues = "https://github.com/luar-space/lsis-afs-test-vectors/issues"
 only-include = [
     "validate.py",
     "codes",
+    "frames",
     "references",
     "manifest.json",
     "README.md",
@@ -49,6 +50,7 @@ only-include = [
 only-include = [
     "validate.py",
     "codes",
+    "frames",
     "references",
     "manifest.json",
     "README.md",

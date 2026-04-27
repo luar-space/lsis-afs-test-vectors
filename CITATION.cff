@@ -11,12 +11,16 @@ keywords:
   - LunaNet
   - PNT
   - spreading-codes
+  - encoded-frames
+  - BCH
+  - LDPC
+  - CRC-24
   - CCSDS
   - ESA
   - test-vectors
   - interoperability
-version: "0.1.0"
-date-released: "2026-04-22"
+version: "0.2.0"
+date-released: "2026-04-27"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
@@ -24,9 +28,15 @@ abstract: >-
   Signal-In-Space Augmented Forward Signal) specification, Version 1.0
   (29 January 2025). Targets the five test levels defined in the
   competition interoperability plan, shipped incrementally as drops to
-  the same repository. Version 0.1.0 ships Level 1 (code generation):
-  all 210 PRN spreading codes — Gold (AFS-I primary), Weil 10230 (AFS-Q
-  primary), Weil 1500 (tertiary) and the four AFS-Q secondary codes —
-  in the standardized hex format, bit-exact against LNIS AD1 Volume A
-  Annex 3 (normative reference) and against LANS-AFS-SIM (independent
-  second oracle). Subsequent drops will add Levels 2–5.
+  the same repository.  Version 0.2.0 covers Levels 1 and 2.  Level 1
+  ships all 210 PRN spreading codes — Gold (AFS-I primary), Weil 10230
+  (AFS-Q primary), Weil 1500 (tertiary) and the four AFS-Q secondary
+  codes — in the standardized hex format, bit-exact against LNIS AD1
+  Volume A Annex 3 (normative reference) and against LANS-AFS-SIM
+  (independent second oracle).  Level 2 ships six encoded-frame
+  vectors covering the five Test Messages prescribed by the
+  interoperability plan plus one boundary frame from Test Case 4,
+  validated against LSIS V1.0 §2.4 structural rules and LANS-AFS-SIM
+  bit-exact frame dumps.  Apache-2.0 source for the LANS-AFS-SIM dump
+  harnesses ships alongside for end-to-end reproducibility.
+  Subsequent drops will add Levels 3–5.
