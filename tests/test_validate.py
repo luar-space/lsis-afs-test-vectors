@@ -214,6 +214,42 @@ def test_diff_frames_missing_file_reported(tmp_path: Path) -> None:
     assert "frame_boundary" in combined or "missing: 1" in combined
 
 
+def test_diff_frames_detects_header_mutation(tmp_path: Path) -> None:
+    """Mutating only a header field (PRN here) must NOT pass silently."""
+    mutated = tmp_path / "frames-header-mutated"
+    shutil.copytree(REPO_ROOT / "frames", mutated)
+
+    target = mutated / "frame_message_1.bin"
+    data = bytearray(target.read_bytes())
+    # Frame header PRN field is bytes 16..20 (uint32 little-endian).
+    # frame_message_1 expects PRN=1; flip it to 99 — payload stays identical.
+    data[16:20] = (99).to_bytes(4, "little")
+    target.write_bytes(bytes(data))
+
+    result = run("diff-frames", str(mutated))
+    assert result.returncode != 0, (
+        f"diff-frames silently passed a header-mutated file: {result.stdout}"
+    )
+    combined = result.stdout + result.stderr
+    assert "frame_message_1" in combined and "prn" in combined.lower()
+
+
+def test_check_lans_afs_sim_frames_handles_truncated_local_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated frames/frame_*.bin must produce a clean failure, not crash."""
+    fake_frames = tmp_path / "frames"
+    shutil.copytree(REPO_ROOT / "frames", fake_frames)
+    target = fake_frames / "frame_message_1.bin"
+    # Drop the last byte — file becomes 6063 bytes instead of 6064.
+    target.write_bytes(target.read_bytes()[:-1])
+
+    monkeypatch.setattr(validate, "FRAMES_DIR", fake_frames)
+
+    rc = validate.cmd_check_lans_afs_sim_frames()
+    assert rc == 1, "truncated local frame should be a failure, not a crash"
+
+
 # ─────────────────────────────── refresh ────────────────────────────────────
 
 

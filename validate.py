@@ -454,7 +454,13 @@ def cmd_check_lans_afs_sim_frames(_args: argparse.Namespace | None = None) -> in
         if not lans_path.exists():
             failures.append(f"{lans_path.name}: missing")
             continue
-        ours_payload = ours_path.read_bytes()[FRAME_HEADER_LEN:]
+        ours_data = ours_path.read_bytes()
+        if len(ours_data) != FRAME_FILE_LEN:
+            failures.append(
+                f"{filename}: file is {len(ours_data)} bytes, expected {FRAME_FILE_LEN}"
+            )
+            continue
+        ours_payload = ours_data[FRAME_HEADER_LEN:]
         lans_payload = lans_path.read_bytes()
         if len(lans_payload) != FRAME_PAYLOAD_LEN:
             failures.append(
@@ -490,7 +496,7 @@ def cmd_diff_frames(args: argparse.Namespace) -> int:
     failures: list[str] = []
     matches = 0
     missing = 0
-    for filename, *_ in FRAME_TEST_VECTORS:
+    for filename, expected_prn, *_ in FRAME_TEST_VECTORS:
         ours = (FRAMES_DIR / filename).read_bytes()[FRAME_HEADER_LEN:]
         their_path = other / filename
         if not their_path.exists():
@@ -500,6 +506,16 @@ def cmd_diff_frames(args: argparse.Namespace) -> int:
         their_data = their_path.read_bytes()
         # Accept either (a) full 6064-byte file with header, or (b) raw 6000-byte payload.
         if len(their_data) == FRAME_FILE_LEN:
+            their_fields, header_errors = _parse_frame_header(
+                their_data[:FRAME_HEADER_LEN], filename
+            )
+            if their_fields.get("prn") != expected_prn:
+                header_errors.append(
+                    f"{filename}: prn={their_fields.get('prn')}, expected {expected_prn}"
+                )
+            if header_errors:
+                failures.extend(header_errors)
+                continue
             their_payload = their_data[FRAME_HEADER_LEN:]
         elif len(their_data) == FRAME_PAYLOAD_LEN:
             their_payload = their_data
