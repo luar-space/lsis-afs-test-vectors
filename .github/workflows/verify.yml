@@ -28,11 +28,17 @@ jobs:
       - name: Tests
         run: uv run pytest
 
-      - name: check-annex3 (normative oracle)
+      - name: check-annex3 (L1 normative oracle)
         run: uv run lsis-afs-validate check-annex3
 
-      - name: check-lans-afs-sim (second oracle)
+      - name: check-lans-afs-sim (L1 second oracle)
         run: uv run lsis-afs-validate check-lans-afs-sim
+
+      - name: check-frames (L2 structural oracle)
+        run: uv run lsis-afs-validate check-frames
+
+      - name: check-lans-afs-sim-frames (L2 second oracle)
+        run: uv run lsis-afs-validate check-lans-afs-sim-frames
 
       - name: verify-manifest
         run: uv run lsis-afs-validate verify-manifest

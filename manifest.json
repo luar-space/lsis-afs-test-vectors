@@ -1,14 +1,15 @@
 {
   "version": "1.0",
   "levels": [
-    1
+    1,
+    2
   ],
-  "generated": "2026-04-24T21:37:59.168938+00:00",
   "implementation": "LuarSpace",
   "spec": "LSIS-AFS V1.0, 29 January 2025",
   "oracles": [
-    "LNIS AD1 Volume A, Annex 3 (10 December 2024) \u2014 normative",
-    "LANS-AFS-SIM (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma) \u2014 independent"
+    "LNIS AD1 Volume A, Annex 3 (10 December 2024) \u2014 L1 normative",
+    "LANS-AFS-SIM (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma) \u2014 L1+L2 independent",
+    "LSIS-AFS V1.0 \u00a72.4 + Gateway 3 checklist \u2014 L2 structural"
   ],
   "files": {
     "codes/codes_prn001.hex": "cecb0cc305103fe6e5643855ab5daa6f4312402b46566928b44c48a95c0147b3",
@@ -221,14 +222,20 @@
     "codes/codes_prn208.hex": "dfb12db4e5c1aafa7b4647c8dd6528127e70186b3428381697e6fbe1593e5b98",
     "codes/codes_prn209.hex": "1a0479d3213676a68bdc71482d96cfeb1c0977794c659e7db1a6ec5bfcdb5e9f",
     "codes/codes_prn210.hex": "083bb2bd70a064c3b6ef4f31ae4bde0ef8685497be021a61284c9688239408d6",
-    "references/README.md": "a0d8e0b7f965612adc716dcdb2d840dd5dfe7dde156280562e3b3ae79af71573",
+    "frames/frame_boundary.bin": "9d53f4cc5fa3ffe2f6c132b668def7186deab55bb8ff46b55a3234e125fcacca",
+    "frames/frame_message_1.bin": "a360d6dcc9dfc488989aaaaabeaf5ff1536aef605b6424bbc3c5f021bda68b19",
+    "frames/frame_message_2.bin": "adb80d252e7c13698b9101a2cf504f7d48072c703d4f2d2a0089f094065f0fa4",
+    "frames/frame_message_3.bin": "d63f9ef19eb5321ff9e8330a28ed92aaed820de437f991eda50eed5f267f6469",
+    "frames/frame_message_4.bin": "16c935a21b16f56b1c0b6e8450fc8f2a2cedc70fb50350716724e8b9aa95de3a",
+    "frames/frame_message_5.bin": "5be86d2f8c1edf46d5521012e0e020b6d4370130427bfcd57173f3e454feeb3c",
+    "references/README.md": "3d538342c587ac47fd4ac3249508109c0199a28425ae6c69cd6c3d44b86718a4",
     "references/annex-3/006_GoldCode2046hex210prns.txt": "3b7f997e9ca7671a3ab7636104a6daf838420818da0e738fc34e60608ddffdbd",
     "references/annex-3/007_l1cp_hex210prns.txt": "d7fad990fae6773d1515da6a0fabf0cf8b19980aed627eb2c63192799241a912",
     "references/annex-3/008_Weil1500hex210prns.txt": "a9634c22d964924238d5dcb0a5ec6f3d48587a45c28a8088f7194911723536a8",
     "references/annex-3/README.md": "3c457b268526fd0ad247f5b1be65765adc190d393419fd8ba36857a6a7955373",
     "references/interoperability.pdf": "a1165f8cd109bcc61271bae98097bd879c4a92b272fa0d8d754d4bf5d673c8b4",
     "references/lans-afs-sim/LICENSE.txt": "74f714bbac1cc596525a2d37008f753f73464a6389d0ba6804f18c135abdaa58",
-    "references/lans-afs-sim/README.md": "d6fa5780eab2ffeb8e09bda7c47e2f7cefb38d04d58da5cba5adc4df6d426084",
+    "references/lans-afs-sim/README.md": "9527ad6502b28e0657450f3c334b62de4d885d42b74d4b5435b72ebe261e7584",
     "references/lans-afs-sim/codes/gold_prn_001.bin": "85150cbaa5217a9454c2fdfdd648a3f2ba6f839326b1817ce7b39e38cd9f09a5",
     "references/lans-afs-sim/codes/gold_prn_002.bin": "2f2b128fb5970721d11362e820567fb51e2d83aa852d067f5b67dccc2775a7a5",
     "references/lans-afs-sim/codes/gold_prn_003.bin": "d5deded452174f8aa767cd924d2cab8db966a3766267ecebdf9d4b71a94d3e43",
@@ -649,6 +656,17 @@
     "references/lans-afs-sim/codes/weil_prn_208.bin": "6df4f7144b908953fe9fa7c3d5adbe4f676d52088e4b94866e3697dbdd3d4dcf",
     "references/lans-afs-sim/codes/weil_prn_209.bin": "4da572470435e28a472b321ba504df72cbd9d7491576c3c8326e148121c412aa",
     "references/lans-afs-sim/codes/weil_prn_210.bin": "b3ba7cbbd9dbb9fc03288247c8e2a5f371b2c0246dff39e2ad6bd5a502b6dc60",
+    "references/lans-afs-sim/frames/lans_frame_boundary.bin": "cc3550fe2c2639c5c5f80cebdcd21ffab4821a2a754678426de8077bbbfd42d6",
+    "references/lans-afs-sim/frames/lans_frame_message_1.bin": "193aab6d03992d5a57fd95f940bebf3d034c7a01c06224d77b642bf507c1d8bd",
+    "references/lans-afs-sim/frames/lans_frame_message_2.bin": "f70c4755d5c668907ddab364be2c1e4d96ff7775b1f56990ce51fd861a7f724e",
+    "references/lans-afs-sim/frames/lans_frame_message_3.bin": "1a23e8ca0c7f52bd6ca104f1972af2997f147a8c41757d00d01bdc240aa003ca",
+    "references/lans-afs-sim/frames/lans_frame_message_4.bin": "cbb1e1c4d69d87358811dcb271c9ab5964d1c63cd779d967d3badd69484b2fa7",
+    "references/lans-afs-sim/frames/lans_frame_message_5.bin": "b5afb683240ce46f81536aee6a618d1e18a600ab5b565160ef865e4712e52527",
+    "references/lans-afs-sim/harnesses/README.md": "c90f18e5473f946ffed10ce0e5371ac4b417056871e12a3ae86cae10aaf1ca2e",
+    "references/lans-afs-sim/harnesses/dump_l2_test_vectors.py": "0d12f323ecac4f47da5fbc93698b600f1fe030e2aa8f5c84e550208afd6d8dc2",
+    "references/lans-afs-sim/harnesses/dump_lans_codes.c": "767a051da471b4c6ab15a225320b63b46eca75fdd669b1601882ca53ddc193f4",
+    "references/lans-afs-sim/harnesses/dump_lans_frame.c": "7ca0bc0a994ff6941d0bc3a57ae68a60409baf3bddf1f3335fe4ce313319cc78",
+    "references/lans-afs-sim/harnesses/verify_oracle.py": "aaabcfc92d26428511e7c968b1705fb3aa75e3397de57acf5e08ab445effcb4e",
     "references/technical-faq.pdf": "dc52419081bf8eca7d766f2cc753cce19b83f819aa838e53dd09695cd97c4f89"
   }
 }

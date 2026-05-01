@@ -13,11 +13,11 @@ transmit / receive chain.
 
 | Level | Covers | Oracle | Status |
 |:-----:|:---|:---|:---:|
-| **1** | Spreading-code generation                              | LNIS Vol A Annex 3 + LANS-AFS-SIM       | ✅ shipped in `v0.1.0` |
-| **2** | Encoded-frame generation (BCH + LDPC + interleaving)   | LNIS Vol A Annex 2 + LANS-AFS-SIM       | planned |
-| **3** | Baseband I/Q signal generation                         | main spec §4 + LANS-AFS-SIM             | planned |
-| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)       | planned |
-| **5** | Navigation-data parsing from decoded frames            | main spec §5–6 + PocketSDR-AFS parser   | planned |
+| **1** | Spreading-code generation                              | LNIS Vol A Annex 3 + LANS-AFS-SIM            | ✅ shipped in `v0.1.0` |
+| **2** | Encoded-frame generation (BCH + CRC-24 + LDPC + interleaving) | LSIS V1.0 §2.4 structural + LANS-AFS-SIM | ✅ shipped in `v0.2.0` |
+| **3** | Baseband I/Q signal generation                         | main spec §4 + LANS-AFS-SIM                  | planned |
+| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)            | planned |
+| **5** | Navigation-data parsing from decoded frames            | main spec §5–6 + PocketSDR-AFS parser        | planned |
 
 L1–L3 oracles sit on the transmit side and are externally verified using [LANS-AFS-SIM](https://github.com/osqzss/LANS-AFS-SIM) alongside the normative references from LSIS-AFS v1.0. 
 L4–L5 sit on the receive side and are covered by [PocketSDR-AFS](https://github.com/osqzss/PocketSDR-AFS) —
@@ -37,20 +37,21 @@ monoculture; finding a discrepancy is a win for everyone.
 
 ```
 lsis-afs-test-vectors/
-├── codes/                           # Level 1 — 210 × codes_prnNNN.hex    ✅ shipped
-├── frames/                          # Level 2 — encoded frames                  (planned)
-├── signals/                         # Level 3 — I/Q signal files                (planned)
+├── codes/                           # Level 1 — 210 × codes_prnNNN.hex      ✅ shipped
+├── frames/                          # Level 2 — 6 × frame_*.bin              ✅ shipped
+├── signals/                         # Level 3 — I/Q signal files                  (planned)
 │                                    # Level 4 — no content dir; see references/pocketsdr-afs/
-├── parsed/                          # Level 5 — parsed navigation JSON          (planned)
+├── parsed/                          # Level 5 — parsed navigation JSON            (planned)
 ├── references/                      # bundled oracles, grows with future levels
 │   ├── annex-3/                     #   L1 normative — 3 × .txt + README
 │   ├── lans-afs-sim/                #   transmit-side oracle (BSD-2-Clause, © Ebinuma)
-│   │   ├── codes/                   #     L1 chip dumps — 420 × .bin      ✅ shipped
-│   │   ├── frames/                  #     L2 (planned)
+│   │   ├── codes/                   #     L1 chip dumps — 420 × .bin        ✅ shipped
+│   │   ├── frames/                  #     L2 frame dumps — 6 × .bin         ✅ shipped
 │   │   ├── signals/                 #     L3 (planned)
+│   │   ├── harnesses/               #     Apache-2.0 source for the dump tools
 │   │   ├── LICENSE.txt
 │   │   └── README.md
-│   ├── pocketsdr-afs/               #   receive-side oracle                    (planned)
+│   ├── pocketsdr-afs/               #   receive-side oracle                       (planned)
 │   │   ├── decode/                  #     L4 cross-decode reference
 │   │   └── parsed/                  #     L5 parsed-JSON reference
 │   ├── interoperability.pdf         #   competition schema reference
@@ -58,9 +59,9 @@ lsis-afs-test-vectors/
 │   └── README.md
 ├── validate.py                      # stdlib-only CLI — single file, zero runtime deps
 ├── tests/                           # pytest suite — exercises every subcommand
-├── manifest.json                    # SHA256 over every shipped content file (639)
+├── manifest.json                    # SHA256 over every shipped content file (656)
 ├── pyproject.toml  uv.lock          # hatchling packaging + pinned dev deps
-├── .github/workflows/verify.yml     # CI: ruff + pytest + three validator oracles
+├── .github/workflows/verify.yml     # CI: ruff + pytest + every validator oracle
 ├── CHANGELOG.md  CORRECTNESS.md  CITATION.cff
 └── LICENSE                          # Apache-2.0 — covers the package;
                                      #   third-party material in references/
@@ -85,14 +86,16 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.1.0` (Level 1)
+## Current release — `v0.2.0` (Levels 1 + 2)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
 > levels verified. See [`CHANGELOG.md`](./CHANGELOG.md) for the full plan.
 
-> 210 PRNs × (Gold 2046, Weil 10230, Weil 1500, four S0–S3 secondaries)
-> bit-exact against LNIS AD1 Volume A Annex 3.
+### Level 1 — spreading codes (210 PRNs)
+
+210 PRNs × (Gold 2046, Weil 10230, Weil 1500, four S0–S3 secondaries),
+bit-exact against LNIS AD1 Volume A Annex 3.
 
 Each `codes_prnNNN.hex` contains seven sections in the format defined by the
 competition interoperability document:
@@ -104,17 +107,46 @@ competition interoperability document:
 [SECONDARY_S0..3]  # 4-bit AFS-Q secondaries (E, 7, B, D), per Annex 3 Table 2
 ```
 
-### Level 1 validator subcommands
+### Level 2 — encoded frames (6 frames)
+
+Six `frames/frame_*.bin` files exercise the BCH(51,8) + CRC-24Q + LDPC(1/2)
++ 60×98 interleaver pipeline per LSIS V1.0 §2.4. Each file is **6064 bytes**:
+a 64-byte `LSISAFS\0` header (per the interop doc) followed by 6000 unpacked
+symbols. The set covers the interop doc's five public Level-2 message slots
+plus one boundary frame from Test Case 4; `frame_message_4.bin` intentionally
+uses a documented bytewise marker surrogate rather than realistic ephemeris:
+
+| File | PRN | FID | TOI | Input pattern |
+|:---|:---:|:---:|:---:|:---|
+| `frame_message_1.bin` |   1 | 0 |  0 | all zeros |
+| `frame_message_2.bin` |   1 | 0 |  0 | all ones |
+| `frame_message_3.bin` |   1 | 0 |  0 | alternating bits (first byte 0xAA, matches interop doc TM3) |
+| `frame_message_4.bin` |   1 | 0 |  0 | bytewise marker (`0x00, 0x01, …`) — restarts per subframe |
+| `frame_message_5.bin` |   1 | 0 |  0 | xorshift32 PRNG, seed = `0xAF52` |
+| `frame_boundary.bin`  | 210 | 3 | 99 | alternating (PRN/FID/TOI at max) |
+
+Marker patterns rather than realistic ephemeris: encoder bit-exactness is
+content-agnostic, and the exact substitutions/conventions are documented in
+[`CORRECTNESS.md`](./CORRECTNESS.md).
+
+### Validator subcommands
 
 ```bash
-# Normative oracle — Annex 3.
+# Level 1 — normative oracle (Annex 3).
 python validate.py check-annex3
 
-# Second oracle — LANS-AFS-SIM chip dumps (bundled).
+# Level 1 — second oracle (LANS-AFS-SIM chip dumps, bundled).
 python validate.py check-lans-afs-sim
 
-# Compare your own implementation's output against this repo.
-python validate.py diff /path/to/your/codes/
+# Level 2 — structural oracle (LSIS V1.0 §2.4 + Gateway 3 checklist).
+python validate.py check-frames
+
+# Level 2 — second oracle (LANS-AFS-SIM frame dumps, bundled).
+python validate.py check-lans-afs-sim-frames
+
+# Compare your implementation's output against this repo.
+python validate.py diff        /path/to/your/codes/
+python validate.py diff-frames /path/to/your/frames/
 
 # Re-hash everything to confirm the distribution is intact.
 python validate.py verify-manifest
@@ -122,18 +154,23 @@ python validate.py verify-manifest
 
 ### Correctness
 
-Two independent oracles ship with this release, both reproducible offline:
+Three independent oracles ship with this release, all reproducible offline:
 
-1. **LNIS AD1 Volume A, Annex 3** (normative) — every `.hex` file matches
+1. **LNIS AD1 Volume A, Annex 3** (L1 normative) — every `.hex` file matches
    byte-for-byte; `check-annex3` reports 630/630.
 2. **LANS-AFS-SIM** (BSD-licensed community reference by Takuji Ebinuma) —
-   210 PRN × 2 code family chip dumps bundled in `references/lans-afs-sim/codes/`;
-   `check-lans-afs-sim` reports 420/420.
+   chip dumps and frame dumps bundled in `references/lans-afs-sim/`;
+   `check-lans-afs-sim` reports 420/420 and `check-lans-afs-sim-frames`
+   reports 6/6.
+3. **LSIS V1.0 §2.4 structural rules** (L2) — sync pattern bit-exact match
+   to `0xCC63F74536F49E04A`, header magic / version / frame-length /
+   PRN integrity, symbol-domain values in {0, 1}; `check-frames` reports 6/6.
 
-Both checks run in CI on every push, alongside `ruff check`, `ruff format
---check`, `pytest`, and `verify-manifest`. See
-[`CORRECTNESS.md`](./CORRECTNESS.md) for the oracle-coverage table and the
-encoding rules they validate against.
+All four checks run in CI on every push, alongside `ruff check`, `ruff
+format --check`, `pytest`, and `verify-manifest`. See
+[`CORRECTNESS.md`](./CORRECTNESS.md) for the oracle-coverage table, the
+encoding rules they validate, and the disclosed normalisations applied to
+the LANS-AFS-SIM frame harness.
 
 These vectors do **not** reproduce the known PRN 62 insertion-index error
 documented in the competition *Technical FAQ* errata
@@ -160,8 +197,8 @@ uv run ruff format       # format
 uv run pytest            # full test suite — exercises every subcommand
 ```
 
-If you add or update any file under `codes/` or `references/`, refresh
-the integrity manifest before committing:
+If you add or update any file under `codes/`, `frames/`, or `references/`,
+refresh the integrity manifest before committing:
 
 ```bash
 uv run lsis-afs-validate rebuild-manifest   # recompute SHA256s → manifest.json

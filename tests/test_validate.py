@@ -1,10 +1,10 @@
 """End-to-end tests for the validator CLI and its subcommands.
 
 These tests exercise every subcommand against the real test vectors
-shipped in the repository.  They're the pytest equivalent of running
-``validate.py check-annex3``, ``check-lans-afs-sim`` and ``verify-manifest``
-from the command line, plus a positive+negative pair for ``diff`` and an
-error-path test for ``refresh``.
+shipped in the repository — codes (Level 1) and frames (Level 2).
+They're the pytest equivalent of running each ``validate.py``
+subcommand from the command line, plus positive+negative pairs for
+``diff`` / ``diff-frames`` and an error-path test for ``refresh``.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import validate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 VALIDATE = REPO_ROOT / "validate.py"
@@ -47,6 +49,85 @@ def test_check_lans_afs_sim_passes() -> None:
     assert result.returncode == 0, result.stderr
     assert "210/210" in result.stdout
     assert "OK — all 420 code dumps" in result.stdout
+
+
+def test_check_frames_passes() -> None:
+    result = run("check-frames")
+    assert result.returncode == 0, result.stderr
+    assert "6/6" in result.stdout
+    assert "OK — all 6 frames pass spec structural checks" in result.stdout
+
+
+def test_check_lans_afs_sim_frames_passes() -> None:
+    result = run("check-lans-afs-sim-frames")
+    assert result.returncode == 0, result.stderr
+    assert "6/6" in result.stdout
+    assert "OK — all 6 frames bit-exact against LANS-AFS-SIM" in result.stdout
+
+
+def test_check_frames_counts_only_clean_frames(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A payload fault must reduce the reported structural pass count."""
+    mutated = tmp_path / "frames-mutated"
+    shutil.copytree(REPO_ROOT / "frames", mutated)
+
+    target = mutated / "frame_message_1.bin"
+    data = bytearray(target.read_bytes())
+    data[64] = 2  # corrupt the first payload symbol without touching the header
+    target.write_bytes(bytes(data))
+
+    monkeypatch.setattr(validate, "FRAMES_DIR", mutated)
+    rc = validate.cmd_check_frames()
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "Structural checks:  5/6" in captured.out
+    assert "do not match sync pattern" in captured.err
+
+
+# Each entry mutates one byte (or range) of the 64-byte header and asserts
+# check-frames flags it. The mutation_substr is checked against captured stderr
+# so the test fails noisily if a structural rule silently stops being enforced.
+_HEADER_MUTATIONS = [
+    # (test_id, offset, replacement_byte, expected_failure_substring)
+    ("magic", 0, 0x00, "magic="),
+    ("version", 8, 0x99, "version=153"),
+    ("frame_length", 12, 0x42, "frame_length="),
+    ("prn", 16, 0xFF, "header PRN="),
+]
+
+
+@pytest.mark.parametrize(("label", "offset", "value", "expected"), _HEADER_MUTATIONS)
+def test_check_frames_catches_header_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    label: str,
+    offset: int,
+    value: int,
+    expected: str,
+) -> None:
+    """Every Gateway 3 header field must be enforced by check-frames."""
+    mutated = tmp_path / f"frames-{label}"
+    shutil.copytree(REPO_ROOT / "frames", mutated)
+
+    target = mutated / "frame_message_1.bin"
+    data = bytearray(target.read_bytes())
+    data[offset] = value
+    target.write_bytes(bytes(data))
+
+    monkeypatch.setattr(validate, "FRAMES_DIR", mutated)
+    rc = validate.cmd_check_frames()
+    captured = capsys.readouterr()
+
+    assert rc == 1, f"check-frames failed to flag a corrupted {label} byte at offset {offset}"
+    assert "Structural checks:  5/6" in captured.out
+    assert expected in captured.err, (
+        f"{label} mutation produced unexpected stderr: {captured.err!r}"
+    )
 
 
 def test_verify_manifest_passes() -> None:
@@ -94,6 +175,81 @@ def test_diff_missing_file_reported(tmp_path: Path) -> None:
     assert "missing: 1" in result.stdout
 
 
+# ─────────────────────────────── diff-frames ────────────────────────────────
+
+
+def test_diff_frames_self_is_clean() -> None:
+    """Comparing frames/ against itself must report bit-exact match."""
+    result = run("diff-frames", "frames")
+    assert result.returncode == 0, result.stderr
+    assert "OK — bit-exact match" in result.stdout
+
+
+def test_diff_frames_detects_mutation(tmp_path: Path) -> None:
+    """A deliberately-mutated copy must exit non-zero and name the differing frame."""
+    mutated = tmp_path / "frames-mutated"
+    shutil.copytree(REPO_ROOT / "frames", mutated)
+
+    target = mutated / "frame_message_1.bin"
+    data = bytearray(target.read_bytes())
+    # Flip a payload byte (skipping the 64-byte header to land on a real symbol).
+    data[100] = 1 if data[100] == 0 else 0
+    target.write_bytes(bytes(data))
+
+    result = run("diff-frames", str(mutated))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "frame_message_1" in combined
+
+
+def test_diff_frames_missing_file_reported(tmp_path: Path) -> None:
+    """Dropping a frame from the copy must show up as missing."""
+    partial = tmp_path / "frames-partial"
+    shutil.copytree(REPO_ROOT / "frames", partial)
+    (partial / "frame_boundary.bin").unlink()
+
+    result = run("diff-frames", str(partial))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "frame_boundary" in combined or "missing: 1" in combined
+
+
+def test_diff_frames_detects_header_mutation(tmp_path: Path) -> None:
+    """Mutating only a header field (PRN here) must NOT pass silently."""
+    mutated = tmp_path / "frames-header-mutated"
+    shutil.copytree(REPO_ROOT / "frames", mutated)
+
+    target = mutated / "frame_message_1.bin"
+    data = bytearray(target.read_bytes())
+    # Frame header PRN field is bytes 16..20 (uint32 little-endian).
+    # frame_message_1 expects PRN=1; flip it to 99 — payload stays identical.
+    data[16:20] = (99).to_bytes(4, "little")
+    target.write_bytes(bytes(data))
+
+    result = run("diff-frames", str(mutated))
+    assert result.returncode != 0, (
+        f"diff-frames silently passed a header-mutated file: {result.stdout}"
+    )
+    combined = result.stdout + result.stderr
+    assert "frame_message_1" in combined and "prn" in combined.lower()
+
+
+def test_check_lans_afs_sim_frames_handles_truncated_local_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated frames/frame_*.bin must produce a clean failure, not crash."""
+    fake_frames = tmp_path / "frames"
+    shutil.copytree(REPO_ROOT / "frames", fake_frames)
+    target = fake_frames / "frame_message_1.bin"
+    # Drop the last byte — file becomes 6063 bytes instead of 6064.
+    target.write_bytes(target.read_bytes()[:-1])
+
+    monkeypatch.setattr(validate, "FRAMES_DIR", fake_frames)
+
+    rc = validate.cmd_check_lans_afs_sim_frames()
+    assert rc == 1, "truncated local frame should be a failure, not a crash"
+
+
 # ─────────────────────────────── refresh ────────────────────────────────────
 
 
@@ -111,10 +267,10 @@ def test_refresh_without_url_is_helpful() -> None:
 def test_manifest_structure() -> None:
     manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
     assert manifest["version"] == "1.0"
-    assert manifest["levels"] == [1]  # grows as future drops land
+    assert manifest["levels"] == [1, 2]  # grows as future drops land
     assert "oracles" in manifest
-    assert len(manifest["oracles"]) == 2  # Annex 3 + LANS-AFS-SIM
-    assert len(manifest["files"]) >= 630  # 210 codes + 3 annex + 420 lans + readmes
+    assert len(manifest["oracles"]) >= 3  # L1 normative + L1/L2 LANS + L2 structural
+    assert len(manifest["files"]) >= 645  # 630 L1 + 6 frames + 6 LANS frames + readmes
 
 
 def test_manifest_covers_every_code_file() -> None:
@@ -132,6 +288,24 @@ def test_manifest_covers_every_lans_dump() -> None:
         for prefix in ("gold", "weil"):
             rel = f"references/lans-afs-sim/codes/{prefix}_prn_{prn:03d}.bin"
             assert rel in files, f"{rel} missing from manifest"
+
+
+def test_manifest_covers_every_frame_file() -> None:
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    expected = [f"frame_message_{i}.bin" for i in range(1, 6)] + ["frame_boundary.bin"]
+    for name in expected:
+        rel = f"frames/{name}"
+        assert rel in files, f"{rel} missing from manifest"
+
+
+def test_manifest_covers_every_lans_frame_dump() -> None:
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    expected = [f"lans_frame_message_{i}.bin" for i in range(1, 6)] + ["lans_frame_boundary.bin"]
+    for name in expected:
+        rel = f"references/lans-afs-sim/frames/{name}"
+        assert rel in files, f"{rel} missing from manifest"
 
 
 def test_manifest_covers_every_annex3_file() -> None:
@@ -152,7 +326,7 @@ def test_build_config_includes_runtime_data() -> None:
     sdist = sdist.split("[dependency-groups]", maxsplit=1)[0]
 
     for section in (wheel, sdist):
-        for needle in ('"codes"', '"references"', '"manifest.json"'):
+        for needle in ('"codes"', '"frames"', '"references"', '"manifest.json"'):
             assert needle in section
 
 
@@ -172,7 +346,10 @@ def test_no_args_shows_help_and_errors() -> None:
     [
         "check-annex3",
         "check-lans-afs-sim",
+        "check-frames",
+        "check-lans-afs-sim-frames",
         "diff",
+        "diff-frames",
         "verify-manifest",
         "rebuild-manifest",
         "refresh",
@@ -196,8 +373,8 @@ def test_rebuild_manifest_is_idempotent(tmp_path: Path) -> None:
     assert verify.returncode == 0, verify.stderr
     # Structural checks on the regenerated file
     after = json.loads((REPO_ROOT / "manifest.json").read_text())
-    assert after["levels"] == [1]
-    assert len(after["files"]) >= 630
+    assert after["levels"] == [1, 2]
+    assert len(after["files"]) >= 645
     # Restore the original manifest so the test has no side-effect on other tests
     (REPO_ROOT / "manifest.json").write_text(before)
     _ = tmp_path  # unused — reserved for future symlink isolation if needed

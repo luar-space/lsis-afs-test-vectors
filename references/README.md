@@ -12,16 +12,19 @@ verbatim with its original provenance preserved.
 
 | Sub-directory | Oracle | Scope | Licence |
 |:---|:---|:---|:---|
-| [`annex-3/`](./annex-3/)           | LNIS AD1 Volume A Annex 3 (normative)  | Level 1: Gold, Weil-10230, Weil-1500 — all 210 PRNs | ESA / CCSDS (redistributed under fair-use / normative-reference conventions) |
-| [`lans-afs-sim/`](./lans-afs-sim/) | LANS-AFS-SIM (independent)             | Level 1: Gold, Weil-10230 — all 210 PRNs            | BSD 2-Clause, © 2025 Takuji Ebinuma |
+| [`annex-3/`](./annex-3/)           | LNIS AD1 Volume A Annex 3 (normative)  | L1: Gold, Weil-10230, Weil-1500 — all 210 PRNs | ESA / CCSDS (redistributed under fair-use / normative-reference conventions) |
+| [`lans-afs-sim/codes/`](./lans-afs-sim/codes/)   | LANS-AFS-SIM (independent) | L1: Gold, Weil-10230 — all 210 PRNs | BSD 2-Clause, © 2025 Takuji Ebinuma |
+| [`lans-afs-sim/frames/`](./lans-afs-sim/frames/) | LANS-AFS-SIM (independent) | L2: 6 encoded frames matching `frames/frame_*.bin` | BSD 2-Clause, © 2025 Takuji Ebinuma |
 
-Future test-vector levels (encoded frames, I/Q signals, parsed JSON) will
-add their own oracle sub-directories here as they ship. See each
-sub-directory's `README.md` for details.
+Future test-vector levels (I/Q signals, parsed JSON) will add their own
+oracle sub-directories here as they ship. See each sub-directory's
+`README.md` for details.
 
 ## Self-check
 
 ```bash
-python validate.py check-annex3           # 630/630 vs Annex 3
-python validate.py check-lans-afs-sim     # 420/420 vs LANS-AFS-SIM
+python validate.py check-annex3                   # 630/630 vs Annex 3 (L1)
+python validate.py check-lans-afs-sim             # 420/420 vs LANS dumps (L1)
+python validate.py check-frames                   #   6/6 structural (L2)
+python validate.py check-lans-afs-sim-frames      #   6/6 vs LANS dumps (L2)
 ```

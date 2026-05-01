@@ -1,35 +1,43 @@
-"""LSIS-AFS Level 1 test-vector validator.
+"""LSIS-AFS interoperability test-vector validator (Levels 1–2).
 
 Subcommands
 -----------
 check-annex3
     Confirm every code in ``codes/`` matches the corresponding entry in the
-    Annex 3 reference files in ``references/``.  This is the normative
-    correctness proof: 210 PRNs × 3 code types (Gold, Weil-10230, Weil-1500).
+    Annex 3 reference files in ``references/``.  L1 normative oracle:
+    210 PRNs × 3 code types (Gold, Weil-10230, Weil-1500).
 
 check-lans-afs-sim
     Confirm every code in ``codes/`` matches chip-for-chip against the
-    LANS-AFS-SIM reference dumps in ``references/lans-afs-sim/``.  This is
-    a second, independent oracle: 210 PRNs × 2 code families (Gold, Weil-10230).
+    LANS-AFS-SIM reference dumps in ``references/lans-afs-sim/codes/``.
+    L1 second oracle: 210 PRNs × 2 code families (Gold, Weil-10230).
+
+check-frames
+    Validate every ``frames/frame_*.bin`` against the structural rules
+    derived from the LSIS-AFS spec and the Gateway 3 deliverables checklist:
+    header magic, version, frame length, PRN, symbol-domain values, and the
+    68-symbol sync pattern (0xCC63F74536F49E04A).  L2 structural oracle.
+
+check-lans-afs-sim-frames
+    Compare every ``frames/frame_*.bin`` (header stripped) byte-for-byte
+    against the corresponding ``references/lans-afs-sim/frames/lans_frame_*.bin``.
+    L2 second oracle.
 
 diff
-    Compare a directory of test vectors (e.g. your own implementation's
-    output) against the vectors in this repository.  Reports per-PRN,
-    per-section pass/fail.
+    Compare a directory of code vectors (codes_prnNNN.hex) against ours.
+
+diff-frames
+    Compare a directory of frame vectors (frame_*.bin) against ours.
 
 verify-manifest
-    Re-compute SHA256 for every file listed in ``manifest.json`` and confirm
-    nothing has been altered.
+    Re-compute SHA256 for every file listed in ``manifest.json``.
 
 rebuild-manifest
-    Regenerate ``manifest.json`` from the current contents of ``codes/`` and
-    ``references/``.  Maintainer command; run after adding or updating any
-    content file so that ``verify-manifest`` keeps passing.
+    Regenerate ``manifest.json`` from the contents of ``codes/``, ``frames/``,
+    and ``references/``.  Maintainer command.
 
 refresh
-    Download the Annex 3 reference files from a user-supplied URL, replacing
-    the local copies and updating ``manifest.json`` SHA256s.  Use when a new
-    normative release is published.
+    Download Annex 3 reference files from a user-supplied URL and re-hash.
 
 Stdlib-only — no third-party dependencies required to run this tool.
 """
@@ -42,15 +50,16 @@ import json
 import re
 import sys
 import urllib.request
-from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 CODES_DIR = REPO_ROOT / "codes"
+FRAMES_DIR = REPO_ROOT / "frames"
 REFERENCES_DIR = REPO_ROOT / "references"
 ANNEX3_DIR = REFERENCES_DIR / "annex-3"
 LANS_DIR = REFERENCES_DIR / "lans-afs-sim"
 LANS_CODES_DIR = LANS_DIR / "codes"
+LANS_FRAMES_DIR = LANS_DIR / "frames"
 MANIFEST_PATH = REPO_ROOT / "manifest.json"
 
 ANNEX3_FILES = {
@@ -74,6 +83,43 @@ SECTION_LENGTHS = {
     "SECONDARY_S2": 1,
     "SECONDARY_S3": 1,
 }
+
+# ─────────────────────────────── Level 2 constants ─────────────────────────
+
+FRAME_MAGIC = b"LSISAFS\x00"
+FRAME_VERSION = 1
+FRAME_PAYLOAD_LEN = 6000  # symbols
+FRAME_HEADER_LEN = 64
+FRAME_FILE_LEN = FRAME_HEADER_LEN + FRAME_PAYLOAD_LEN  # 6064 bytes
+
+# Sync pattern (LSIS V1.0 §2.4.1, Table 12; FAQ Q17): 17 nibbles = 68 bits MSB-first
+SYNC_PATTERN_HEX = "CC63F74536F49E04A"
+EXPECTED_SYNC_BITS = bytes(int(b) for b in "".join(f"{int(c, 16):04b}" for c in SYNC_PATTERN_HEX))
+assert len(EXPECTED_SYNC_BITS) == 68
+
+# (filename, expected_prn, expected_fid, expected_toi).  PRN is checked
+# structurally by check-frames (it lives in the 64-byte header).  FID and
+# TOI are encoded into the BCH(51,8)-protected SB1 (52 bits at payload
+# offset 68); they are verified bit-for-bit by check-lans-afs-sim-frames,
+# whose LANS reference dump was produced by upstream
+# generate_BCH_AFS_SF1(sb1, fid, toi) at the values listed below.  Any
+# disagreement on FID/TOI in our frame surfaces as an SB1 payload diff.
+# The per-file (FID, TOI) inputs are also pinned in
+# references/lans-afs-sim/harnesses/dump_l2_test_vectors.py.
+FRAME_TEST_VECTORS: list[tuple[str, int, int, int]] = [
+    ("frame_message_1.bin", 1, 0, 0),
+    ("frame_message_2.bin", 1, 0, 0),
+    ("frame_message_3.bin", 1, 0, 0),
+    ("frame_message_4.bin", 1, 0, 0),
+    ("frame_message_5.bin", 1, 0, 0),
+    ("frame_boundary.bin", 210, 3, 99),
+]
+
+
+def _lans_frame_name(frame_filename: str) -> str:
+    """Map our ``frame_xxx.bin`` to the LANS dump ``lans_frame_xxx.bin``."""
+    assert frame_filename.startswith("frame_") and frame_filename.endswith(".bin")
+    return "lans_" + frame_filename
 
 
 # ─────────────────────────────── parsing helpers ────────────────────────────
@@ -282,6 +328,221 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────── frame helpers ─────────────────────────────
+
+
+def _parse_frame_header(data: bytes, source: str) -> tuple[dict[str, object], list[str]]:
+    """Parse the 64-byte frame header. Returns (fields, errors)."""
+    errors: list[str] = []
+    if len(data) < FRAME_HEADER_LEN:
+        errors.append(f"{source}: file shorter than 64-byte header")
+        return {}, errors
+
+    magic = data[0:8]
+    version = int.from_bytes(data[8:12], "little")
+    frame_length = int.from_bytes(data[12:16], "little")
+    prn = int.from_bytes(data[16:20], "little")
+    timestamp = int.from_bytes(data[20:28], "little", signed=True)
+
+    fields: dict[str, object] = {
+        "magic": magic,
+        "version": version,
+        "frame_length": frame_length,
+        "prn": prn,
+        "timestamp": timestamp,
+    }
+
+    if magic != FRAME_MAGIC:
+        errors.append(f"{source}: magic={magic!r}, expected {FRAME_MAGIC!r}")
+    if version != FRAME_VERSION:
+        errors.append(f"{source}: version={version}, expected {FRAME_VERSION}")
+    if frame_length != FRAME_PAYLOAD_LEN:
+        errors.append(f"{source}: frame_length={frame_length}, expected {FRAME_PAYLOAD_LEN}")
+    return fields, errors
+
+
+def _check_frame_payload(payload: bytes, source: str) -> list[str]:
+    """Validate the 6000-symbol payload structurally. Returns list of errors."""
+    errors: list[str] = []
+    if len(payload) != FRAME_PAYLOAD_LEN:
+        errors.append(f"{source}: payload is {len(payload)} bytes, expected {FRAME_PAYLOAD_LEN}")
+        return errors
+    # Symbol-domain values must be {0, 1}
+    bad = sum(1 for b in payload if b not in (0, 1))
+    if bad:
+        errors.append(f"{source}: {bad} symbols are not 0/1")
+    # Sync prefix
+    if payload[:68] != EXPECTED_SYNC_BITS:
+        errors.append(
+            f"{source}: first 68 symbols do not match sync pattern "
+            f"0x{SYNC_PATTERN_HEX} (LSIS V1.0 §2.4.1)"
+        )
+    return errors
+
+
+# ─────────────────────────────── check-frames ──────────────────────────────
+
+
+def cmd_check_frames(_args: argparse.Namespace | None = None) -> int:
+    del _args
+    if not FRAMES_DIR.is_dir():
+        print(f"ERROR: {FRAMES_DIR} not found", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    passed = 0
+    for filename, expected_prn, *_ in FRAME_TEST_VECTORS:
+        path = FRAMES_DIR / filename
+        if not path.exists():
+            failures.append(f"{filename}: missing")
+            continue
+        data = path.read_bytes()
+        if len(data) != FRAME_FILE_LEN:
+            failures.append(
+                f"{filename}: file is {len(data)} bytes, expected {FRAME_FILE_LEN} "
+                f"(64 header + {FRAME_PAYLOAD_LEN} payload)"
+            )
+            continue
+        fields, header_errors = _parse_frame_header(data[:FRAME_HEADER_LEN], filename)
+        frame_errors = list(header_errors)
+        if fields.get("prn") != expected_prn:
+            frame_errors.append(
+                f"{filename}: header PRN={fields.get('prn')}, expected {expected_prn}"
+            )
+        frame_errors.extend(_check_frame_payload(data[FRAME_HEADER_LEN:], filename))
+        failures.extend(frame_errors)
+        if not frame_errors:
+            passed += 1
+
+    total = len(FRAME_TEST_VECTORS)
+    print(f"  Structural checks: {passed:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} problems", file=sys.stderr)
+        for msg in failures[:20]:
+            print(f"  {msg}", file=sys.stderr)
+        if len(failures) > 20:
+            print(f"  … ({len(failures) - 20} more)", file=sys.stderr)
+        return 1
+    print(f"\nOK — all {total} frames pass spec structural checks.")
+    return 0
+
+
+# ─────────────────────────────── check-lans-afs-sim-frames ─────────────────
+
+
+def cmd_check_lans_afs_sim_frames(_args: argparse.Namespace | None = None) -> int:
+    del _args
+    if not FRAMES_DIR.is_dir():
+        print(f"ERROR: {FRAMES_DIR} not found", file=sys.stderr)
+        return 2
+    if not LANS_FRAMES_DIR.is_dir():
+        print(
+            f"ERROR: {LANS_FRAMES_DIR} not found. This oracle is optional; "
+            f"run 'python validate.py check-frames' for the structural check.",
+            file=sys.stderr,
+        )
+        return 2
+
+    failures: list[str] = []
+    passed = 0
+    for filename, *_ in FRAME_TEST_VECTORS:
+        ours_path = FRAMES_DIR / filename
+        lans_path = LANS_FRAMES_DIR / _lans_frame_name(filename)
+        if not ours_path.exists():
+            failures.append(f"{filename}: missing on our side")
+            continue
+        if not lans_path.exists():
+            failures.append(f"{lans_path.name}: missing")
+            continue
+        ours_data = ours_path.read_bytes()
+        if len(ours_data) != FRAME_FILE_LEN:
+            failures.append(
+                f"{filename}: file is {len(ours_data)} bytes, expected {FRAME_FILE_LEN}"
+            )
+            continue
+        ours_payload = ours_data[FRAME_HEADER_LEN:]
+        lans_payload = lans_path.read_bytes()
+        if len(lans_payload) != FRAME_PAYLOAD_LEN:
+            failures.append(
+                f"{lans_path.name}: {len(lans_payload)} bytes, expected {FRAME_PAYLOAD_LEN}"
+            )
+            continue
+        if ours_payload == lans_payload:
+            passed += 1
+        else:
+            mismatches = sum(1 for a, b in zip(ours_payload, lans_payload, strict=True) if a != b)
+            failures.append(f"{filename}: {mismatches}/{FRAME_PAYLOAD_LEN} symbol mismatches")
+
+    total = len(FRAME_TEST_VECTORS)
+    print(f"  Bit-exact vs LANS-AFS-SIM: {passed:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} problems", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print(f"\nOK — all {total} frames bit-exact against LANS-AFS-SIM reference.")
+    return 0
+
+
+# ─────────────────────────────── diff-frames ───────────────────────────────
+
+
+def cmd_diff_frames(args: argparse.Namespace) -> int:
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    matches = 0
+    missing = 0
+    for filename, expected_prn, *_ in FRAME_TEST_VECTORS:
+        ours = (FRAMES_DIR / filename).read_bytes()[FRAME_HEADER_LEN:]
+        their_path = other / filename
+        if not their_path.exists():
+            missing += 1
+            failures.append(f"{filename}: missing in {other}")
+            continue
+        their_data = their_path.read_bytes()
+        # Accept either (a) full 6064-byte file with header, or (b) raw 6000-byte payload.
+        if len(their_data) == FRAME_FILE_LEN:
+            their_fields, header_errors = _parse_frame_header(
+                their_data[:FRAME_HEADER_LEN], filename
+            )
+            if their_fields.get("prn") != expected_prn:
+                header_errors.append(
+                    f"{filename}: prn={their_fields.get('prn')}, expected {expected_prn}"
+                )
+            if header_errors:
+                failures.extend(header_errors)
+                continue
+            their_payload = their_data[FRAME_HEADER_LEN:]
+        elif len(their_data) == FRAME_PAYLOAD_LEN:
+            their_payload = their_data
+        else:
+            failures.append(
+                f"{filename}: their file is {len(their_data)} bytes, "
+                f"expected {FRAME_FILE_LEN} or {FRAME_PAYLOAD_LEN}"
+            )
+            continue
+        if ours == their_payload:
+            matches += 1
+        else:
+            mismatches = sum(1 for a, b in zip(ours, their_payload, strict=True) if a != b)
+            failures.append(f"{filename}: {mismatches}/{FRAME_PAYLOAD_LEN} symbol mismatches")
+
+    total = len(FRAME_TEST_VECTORS)
+    print(f"Compared {total - missing}/{total} frames (missing: {missing})")
+    print(f"  Bit-exact: {matches:>2}/{total}")
+    if failures:
+        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print("\nOK — bit-exact match.")
+    return 0
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -322,7 +583,7 @@ def _rebuild_manifest() -> int:
     Returns the number of files hashed.
     """
     entries: dict[str, str] = {}
-    for sub in ("codes", "references"):
+    for sub in ("codes", "frames", "references"):
         base = REPO_ROOT / sub
         if not base.is_dir():
             continue
@@ -334,18 +595,22 @@ def _rebuild_manifest() -> int:
     manifest: dict[str, object] = (
         json.loads(MANIFEST_PATH.read_text()) if MANIFEST_PATH.exists() else {}
     )
-    # Drop any stale scalar-schema key before rewriting.
+    # Drop any stale scalar-schema key before rewriting, plus the legacy
+    # wall-clock "generated" timestamp — we want the manifest itself to be
+    # byte-stable across rebuilds (consistent with the pinned frame-header
+    # timestamp), so verify-manifest and CI don't churn on no-op rebuilds.
     manifest.pop("level", None)
+    manifest.pop("generated", None)
     manifest.update(
         {
             "version": "1.0",
-            "levels": [1],
-            "generated": datetime.now(UTC).isoformat(),
+            "levels": [1, 2],
             "implementation": "LuarSpace",
             "spec": "LSIS-AFS V1.0, 29 January 2025",
             "oracles": [
-                "LNIS AD1 Volume A, Annex 3 (10 December 2024) — normative",
-                "LANS-AFS-SIM (BSD-2-Clause, © 2025 Takuji Ebinuma) — independent",
+                "LNIS AD1 Volume A, Annex 3 (10 December 2024) — L1 normative",
+                "LANS-AFS-SIM (BSD-2-Clause, © 2025 Takuji Ebinuma) — L1+L2 independent",
+                "LSIS-AFS V1.0 §2.4 + Gateway 3 checklist — L2 structural",
             ],
             "files": dict(sorted(entries.items())),
         }
@@ -411,7 +676,7 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="validate.py",
-        description="LSIS-AFS Level 1 test-vector validator.",
+        description="LSIS-AFS interoperability test-vector validator (Levels 1-2).",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -422,18 +687,38 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser(
         "check-lans-afs-sim",
-        help="Compare codes/ against references/lans-afs-sim/ binary dumps (second oracle).",
+        help="Compare codes/ against LANS-AFS-SIM dumps (L1 second oracle).",
     ).set_defaults(func=cmd_check_lans_afs_sim)
+
+    sub.add_parser(
+        "check-frames",
+        help="Validate frames/ structurally per LSIS V1.0 §2.4 (L2 structural oracle).",
+    ).set_defaults(func=cmd_check_frames)
+
+    sub.add_parser(
+        "check-lans-afs-sim-frames",
+        help="Compare frames/ payloads against LANS-AFS-SIM dumps (L2 second oracle).",
+    ).set_defaults(func=cmd_check_lans_afs_sim_frames)
 
     p_diff = sub.add_parser(
         "diff",
-        help="Compare a directory of test vectors to ours, section-by-section.",
+        help="Compare a directory of code vectors to ours, section-by-section.",
     )
     p_diff.add_argument(
         "other_dir",
         help="Directory containing codes_prnNNN.hex files to compare against ours.",
     )
     p_diff.set_defaults(func=cmd_diff)
+
+    p_diff_frames = sub.add_parser(
+        "diff-frames",
+        help="Compare a directory of frame vectors to ours, byte-by-byte.",
+    )
+    p_diff_frames.add_argument(
+        "other_dir",
+        help="Directory containing frame_*.bin files to compare against ours.",
+    )
+    p_diff_frames.set_defaults(func=cmd_diff_frames)
 
     sub.add_parser(
         "verify-manifest",
