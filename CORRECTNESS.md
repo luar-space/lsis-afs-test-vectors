@@ -404,3 +404,95 @@ the public Apache-2.0 release of the LuarSpace generator is scheduled
 for Phase 2 of the competition timeline.  Until then, the LANS-AFS-SIM
 agreement at the encoded-bit level is the external evidence that the
 LuarSpace vectors in `frames/` are correct.
+
+---
+
+# Canonical pre-encode inputs (`inputs/`, v0.2.1)
+
+For each shipped `frames/frame_*.bin`, the corresponding
+`inputs/frame_*_input.bin` provides the **exact SB2 + SB3 + SB4 bytes the
+encoder consumed** before BCH/CRC/LDPC/interleave.  The intent is to let
+any team feed the documented inputs into their encoder and bit-compare
+the output against `frames/frame_*.bin` via `diff-frames`, isolating
+correctness to the FEC pipeline alone.
+
+## File format
+
+| Field | Bytes | Notes |
+|:---|---:|:---|
+| SB2 input bits | 1176 | Unpacked, 1 byte per bit, value 0x00 / 0x01 |
+| SB3 input bits |  846 | Same |
+| SB4 input bits |  846 | Same |
+| **Total** | **2868** | per file |
+
+No header, no padding.  The unpacked-symbol convention matches
+`frames/frame_*.bin`'s payload format for consistency across the package.
+
+## What's normalised, what isn't
+
+**Applied in the canonical inputs (post-normalisation):**
+- **FAQ Q21 / LSIS-300 spare-bit pattern** on SB2 bits 1150–1175.  Every
+  shipped `inputs/frame_*_input.bin` has these 26 bits set to the
+  spec-mandated alternating-0/1 pattern starting with 0, regardless of
+  the underlying test message pattern.  This makes the file
+  self-describing ground truth: a contestant whose encoder consumes the
+  file produces our `frames/frame_*.bin` regardless of whether their
+  encoder applies Q21 internally.
+
+**Not applied (the encoder's responsibility):**
+- **CRC-24Q** computation over the 1176-bit SB2 / 846-bit SB3 / 846-bit
+  SB4 data, producing the 1200- / 870- / 870-bit codeword info inputs.
+- **LDPC(1/2)** rate-1/2 quasi-cyclic encoding of each subframe info
+  block.
+- **60×98 block interleaver** over the concatenation of encoded SB2 +
+  SB3 + SB4 (5880 symbols total).
+- **BCH(51,8)** encoding of SB1 from the (FID, TOI) tuple — these are
+  not stored in `inputs/`; they're per-file constants pinned in the
+  `FRAME_TEST_VECTORS` table in `validate.py`.
+- **64-byte `LSISAFS\0` header** prepended to the 6000-symbol payload.
+
+## Per-file pattern
+
+| File | Pattern (SB2/SB3/SB4 before Q21) |
+|:---|:---|
+| `frame_message_1_input.bin` | All zeros |
+| `frame_message_2_input.bin` | All ones |
+| `frame_message_3_input.bin` | Alternating, `bit_i = (i + 1) mod 2` (first packed byte `0xAA`) |
+| `frame_message_4_input.bin` | Bytewise marker: bit at position `i` is the MSB-first bit of byte `(i // 8) mod 256` within each subframe; subframes restart from byte `0x00` |
+| `frame_message_5_input.bin` | xorshift32 PRNG, seed `0xAF52`, single bitstream consumed across SB2 → SB3 → SB4 |
+| `frame_boundary_input.bin` | Alternating, `bit_i = i mod 2` (first packed byte `0x55`) |
+
+After the pattern is filled into SB2, the FAQ Q21 normalisation overwrites
+SB2 bits 1150–1175 with `[0, 1, 0, 1, …]` regardless of pattern.  SB3 and
+SB4 are not touched by Q21 (no spare-bit ranges in those subframes for
+this normalisation).
+
+## Reproducibility
+
+The inputs are reproducible from the documented patterns + Q21
+normalisation alone — no encoder, no decoder, no orbital data.  The
+helper logic in `validate.py` (`_build_canonical_input`) is stdlib-only
+Python; `python validate.py check-canonical-inputs` re-derives the bytes
+and confirms they match the shipped files (`6/6`), and
+`python validate.py build-canonical-inputs` regenerates `inputs/` from
+the same logic.  CI runs both on every push.
+
+## Workflow for cross-team validation
+
+```bash
+# 1. Read inputs/frame_message_X_input.bin → 2868 bytes of SB2/SB3/SB4 input.
+# 2. Feed into your encoder pipeline (CRC + LDPC + interleave + BCH SB1 +
+#    sync prefix + header).
+# 3. Diff against ours:
+python validate.py diff-frames /path/to/your/frames/
+```
+
+Bit-exact agreement isolates correctness to the FEC pipeline.  Input-
+construction conventions (TM3 starting bit, TM4 marker stream restart,
+TM5 PRNG, FAQ Q21 spare bits) are no longer a source of cross-team
+disagreement — every team consumes the same canonical bytes.
+
+If you generate your own canonical inputs (e.g., to test your
+input-builder logic independently), `python validate.py diff-inputs
+/path/to/your/inputs/` byte-compares against ours and localises the
+first disagreement to a specific subframe + bit position.

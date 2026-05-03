@@ -29,6 +29,17 @@ diff
 diff-frames
     Compare a directory of frame vectors (frame_*.bin) against ours.
 
+check-canonical-inputs
+    Verify the canonical pre-encode input files in ``inputs/`` reproduce
+    from the documented patterns (zeros / ones / alternating0 / alternating1
+    / marker / xorshift32, with FAQ Q21 spare-bit normalisation applied).
+
+diff-inputs
+    Compare a directory of canonical-input files (frame_*_input.bin) against ours.
+
+build-canonical-inputs
+    Regenerate ``inputs/`` from the documented patterns.  Maintainer command.
+
 verify-manifest
     Re-compute SHA256 for every file listed in ``manifest.json``.
 
@@ -120,6 +131,107 @@ def _lans_frame_name(frame_filename: str) -> str:
     """Map our ``frame_xxx.bin`` to the LANS dump ``lans_frame_xxx.bin``."""
     assert frame_filename.startswith("frame_") and frame_filename.endswith(".bin")
     return "lans_" + frame_filename
+
+
+# ─────────────────────────────── Canonical inputs (L2 pre-encode) ──────────
+#
+# Per LSIS V1.0 §2.4: subframe data-bit counts (the bits the encoder consumes
+# before CRC-24Q + LDPC).  Canonical input files in inputs/ ship these bits
+# in unpacked form (1 byte per bit, value 0x00 or 0x01) so any contestant
+# can read them, feed them into their encoder, and bit-compare the output
+# against frames/frame_*.bin via diff-frames.  The 6 input files map 1:1
+# to the 6 frame files in FRAME_TEST_VECTORS.
+#
+# FAQ Q21 / LSIS-300: SB2 bits 1150..1175 carry the spec-mandated alternating
+# 0/1 pattern starting with 0.  This is applied in the canonical input bytes
+# (post-normalisation) so the file is self-describing ground truth: a
+# contestant whose encoder consumes the file produces our frame regardless
+# of whether their encoder applies Q21 internally.
+
+SB2_BITS = 1176
+SB3_BITS = 846
+SB4_BITS = 846
+INPUT_BYTE_COUNT = SB2_BITS + SB3_BITS + SB4_BITS  # 2868
+
+INPUTS_DIR = REPO_ROOT / "inputs"
+
+SB2_SPARE_BITS_OFFSET = 1150
+SB2_SPARE_BITS_LENGTH = 26
+
+# (filename, pattern_name).  Pattern names are documented in CORRECTNESS.md.
+INPUT_TEST_VECTORS: list[tuple[str, str]] = [
+    ("frame_message_1_input.bin", "zeros"),
+    ("frame_message_2_input.bin", "ones"),
+    ("frame_message_3_input.bin", "alternating1"),
+    ("frame_message_4_input.bin", "marker"),
+    ("frame_message_5_input.bin", "xorshift32"),
+    ("frame_boundary_input.bin", "alternating0"),
+]
+
+
+def _xorshift32_bits(seed: int, count: int) -> list[int]:
+    """xorshift32 PRNG; bit i = state & 1 after iteration i+1.  See CORRECTNESS.md TM5."""
+    state = seed & 0xFFFFFFFF
+    out: list[int] = []
+    for _ in range(count):
+        state ^= (state << 13) & 0xFFFFFFFF
+        state ^= state >> 17
+        state ^= (state << 5) & 0xFFFFFFFF
+        out.append(state & 1)
+    return out
+
+
+def _marker_bits(bit_count: int) -> list[int]:
+    """Bytewise marker: bit i is the MSB-first bit of byte (i // 8) mod 256."""
+    out: list[int] = []
+    for i in range(bit_count):
+        byte_val = (i // 8) % 256
+        bit_pos = i % 8  # 0 = MSB
+        out.append((byte_val >> (7 - bit_pos)) & 1)
+    return out
+
+
+def _build_canonical_input(name: str) -> bytes:
+    """Return the 2868-byte canonical input (SB2 || SB3 || SB4) for a pattern.
+
+    SB2 includes the FAQ Q21 spare-bit normalisation at bits 1150..1175.
+    """
+    if name == "zeros":
+        sb2 = [0] * SB2_BITS
+        sb3 = [0] * SB3_BITS
+        sb4 = [0] * SB4_BITS
+    elif name == "ones":
+        sb2 = [1] * SB2_BITS
+        sb3 = [1] * SB3_BITS
+        sb4 = [1] * SB4_BITS
+    elif name == "alternating0":
+        # bit_i = i mod 2 → first packed byte 0x55
+        sb2 = [i % 2 for i in range(SB2_BITS)]
+        sb3 = [i % 2 for i in range(SB3_BITS)]
+        sb4 = [i % 2 for i in range(SB4_BITS)]
+    elif name == "alternating1":
+        # bit_i = (i + 1) mod 2 → first packed byte 0xAA, matches interop-doc TM3
+        sb2 = [(i + 1) % 2 for i in range(SB2_BITS)]
+        sb3 = [(i + 1) % 2 for i in range(SB3_BITS)]
+        sb4 = [(i + 1) % 2 for i in range(SB4_BITS)]
+    elif name == "marker":
+        sb2 = _marker_bits(SB2_BITS)
+        sb3 = _marker_bits(SB3_BITS)
+        sb4 = _marker_bits(SB4_BITS)
+    elif name == "xorshift32":
+        # Single stream consumed across SB2 → SB3 → SB4 (matches dump_lans_frame.c)
+        all_bits = _xorshift32_bits(0xAF52, INPUT_BYTE_COUNT)
+        sb2 = all_bits[:SB2_BITS]
+        sb3 = all_bits[SB2_BITS : SB2_BITS + SB3_BITS]
+        sb4 = all_bits[SB2_BITS + SB3_BITS :]
+    else:
+        raise ValueError(f"Unknown canonical-input pattern: {name!r}")
+
+    # FAQ Q21 spare-bit normalisation on SB2[1150:1176].
+    for i in range(SB2_SPARE_BITS_LENGTH):
+        sb2[SB2_SPARE_BITS_OFFSET + i] = i % 2
+
+    return bytes(sb2) + bytes(sb3) + bytes(sb4)
 
 
 # ─────────────────────────────── parsing helpers ────────────────────────────
@@ -543,6 +655,121 @@ def cmd_diff_frames(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────── check-canonical-inputs ────────────────────
+
+
+def _locate_first_diff(diff_offset: int) -> str:
+    """Return a 'SB{n} bit {k}' label for a byte offset in the SB2||SB3||SB4 stream."""
+    if diff_offset < SB2_BITS:
+        return f"SB2 bit {diff_offset}"
+    if diff_offset < SB2_BITS + SB3_BITS:
+        return f"SB3 bit {diff_offset - SB2_BITS}"
+    return f"SB4 bit {diff_offset - SB2_BITS - SB3_BITS}"
+
+
+def cmd_check_canonical_inputs(_args: argparse.Namespace | None = None) -> int:
+    """Verify shipped canonical-input files reproduce from the documented patterns."""
+    del _args
+    if not INPUTS_DIR.is_dir():
+        print(f"ERROR: {INPUTS_DIR} not found", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    passed = 0
+    for filename, pattern in INPUT_TEST_VECTORS:
+        path = INPUTS_DIR / filename
+        if not path.exists():
+            failures.append(f"{filename}: missing")
+            continue
+        actual = path.read_bytes()
+        expected = _build_canonical_input(pattern)
+        if actual == expected:
+            passed += 1
+            continue
+        if len(actual) != INPUT_BYTE_COUNT:
+            failures.append(f"{filename}: file is {len(actual)} bytes, expected {INPUT_BYTE_COUNT}")
+            continue
+        mismatches = sum(1 for a, b in zip(actual, expected, strict=True) if a != b)
+        first = next(i for i, (a, b) in enumerate(zip(actual, expected, strict=True)) if a != b)
+        failures.append(
+            f"{filename}: {mismatches}/{INPUT_BYTE_COUNT} bit mismatches "
+            f"vs {pattern!r} reference (first at {_locate_first_diff(first)})"
+        )
+
+    total = len(INPUT_TEST_VECTORS)
+    print(f"  Canonical inputs: {passed:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} mismatches", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print(f"\nOK — all {total} canonical input files reproduce from documented patterns.")
+    return 0
+
+
+# ─────────────────────────────── diff-inputs ───────────────────────────────
+
+
+def cmd_diff_inputs(args: argparse.Namespace) -> int:
+    """Compare a directory of canonical-input files against ours."""
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    matches = 0
+    missing = 0
+    for filename, _pattern in INPUT_TEST_VECTORS:
+        ours = (INPUTS_DIR / filename).read_bytes()
+        their_path = other / filename
+        if not their_path.exists():
+            missing += 1
+            failures.append(f"{filename}: missing in {other}")
+            continue
+        their_data = their_path.read_bytes()
+        if len(their_data) != INPUT_BYTE_COUNT:
+            failures.append(
+                f"{filename}: their file is {len(their_data)} bytes, expected {INPUT_BYTE_COUNT}"
+            )
+            continue
+        if ours == their_data:
+            matches += 1
+            continue
+        mismatches = sum(1 for a, b in zip(ours, their_data, strict=True) if a != b)
+        first = next(i for i, (a, b) in enumerate(zip(ours, their_data, strict=True)) if a != b)
+        failures.append(
+            f"{filename}: {mismatches}/{INPUT_BYTE_COUNT} bit mismatches "
+            f"(first at {_locate_first_diff(first)})"
+        )
+
+    total = len(INPUT_TEST_VECTORS)
+    print(f"Compared {total - missing}/{total} canonical inputs (missing: {missing})")
+    print(f"  Bit-exact: {matches:>2}/{total}")
+    if failures:
+        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print("\nOK — bit-exact match.")
+    return 0
+
+
+# ─────────────────────────────── build-canonical-inputs ────────────────────
+
+
+def cmd_build_canonical_inputs(_args: argparse.Namespace | None = None) -> int:
+    """Maintainer command: regenerate inputs/ from the documented patterns."""
+    del _args
+    INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    for filename, pattern in INPUT_TEST_VECTORS:
+        data = _build_canonical_input(pattern)
+        assert len(data) == INPUT_BYTE_COUNT
+        (INPUTS_DIR / filename).write_bytes(data)
+    print(f"Wrote {len(INPUT_TEST_VECTORS)} canonical input files to {INPUTS_DIR}.")
+    return 0
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -583,7 +810,7 @@ def _rebuild_manifest() -> int:
     Returns the number of files hashed.
     """
     entries: dict[str, str] = {}
-    for sub in ("codes", "frames", "references"):
+    for sub in ("codes", "frames", "inputs", "references"):
         base = REPO_ROOT / sub
         if not base.is_dir():
             continue
@@ -719,6 +946,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing frame_*.bin files to compare against ours.",
     )
     p_diff_frames.set_defaults(func=cmd_diff_frames)
+
+    sub.add_parser(
+        "check-canonical-inputs",
+        help="Verify inputs/ canonical files reproduce from the documented patterns.",
+    ).set_defaults(func=cmd_check_canonical_inputs)
+
+    p_diff_inputs = sub.add_parser(
+        "diff-inputs",
+        help="Compare a directory of canonical-input files (frame_*_input.bin) against ours.",
+    )
+    p_diff_inputs.add_argument(
+        "other_dir",
+        help="Directory containing frame_*_input.bin files to compare against ours.",
+    )
+    p_diff_inputs.set_defaults(func=cmd_diff_inputs)
+
+    sub.add_parser(
+        "build-canonical-inputs",
+        help="Regenerate inputs/ from the documented patterns (maintainer command).",
+    ).set_defaults(func=cmd_build_canonical_inputs)
 
     sub.add_parser(
         "verify-manifest",

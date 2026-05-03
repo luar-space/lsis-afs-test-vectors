@@ -40,5 +40,8 @@ jobs:
       - name: check-lans-afs-sim-frames (L2 second oracle)
         run: uv run lsis-afs-validate check-lans-afs-sim-frames
 
+      - name: check-canonical-inputs (L2 pre-encode reproducibility)
+        run: uv run lsis-afs-validate check-canonical-inputs
+
       - name: verify-manifest
         run: uv run lsis-afs-validate verify-manifest

@@ -39,6 +39,7 @@ monoculture; finding a discrepancy is a win for everyone.
 lsis-afs-test-vectors/
 ├── codes/                           # Level 1 — 210 × codes_prnNNN.hex      ✅ shipped
 ├── frames/                          # Level 2 — 6 × frame_*.bin              ✅ shipped
+├── inputs/                          # Level 2 — 6 × frame_*_input.bin (canonical pre-encode bytes) ✅ shipped
 ├── signals/                         # Level 3 — I/Q signal files                  (planned)
 │                                    # Level 4 — no content dir; see references/pocketsdr-afs/
 ├── parsed/                          # Level 5 — parsed navigation JSON            (planned)
@@ -59,7 +60,7 @@ lsis-afs-test-vectors/
 │   └── README.md
 ├── validate.py                      # stdlib-only CLI — single file, zero runtime deps
 ├── tests/                           # pytest suite — exercises every subcommand
-├── manifest.json                    # SHA256 over every shipped content file (656)
+├── manifest.json                    # SHA256 over every shipped content file (662)
 ├── pyproject.toml  uv.lock          # hatchling packaging + pinned dev deps
 ├── .github/workflows/verify.yml     # CI: ruff + pytest + every validator oracle
 ├── CHANGELOG.md  CORRECTNESS.md  CITATION.cff
@@ -86,7 +87,7 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.2.0` (Levels 1 + 2)
+## Current release — `v0.2.1` (Levels 1 + 2 + canonical pre-encode inputs)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
@@ -129,6 +130,34 @@ Marker patterns rather than realistic ephemeris: encoder bit-exactness is
 content-agnostic, and the exact substitutions/conventions are documented in
 [`CORRECTNESS.md`](./CORRECTNESS.md).
 
+### Canonical pre-encode inputs (`inputs/`)
+
+For each `frame_*.bin`, the corresponding `inputs/frame_*_input.bin` ships the
+**SB2 + SB3 + SB4 input bytes** that produced it. Every file is **2868 bytes**
+in unpacked form (1 byte per bit, value `0x00` / `0x01`; layout: 1176 SB2 +
+846 SB3 + 846 SB4). FAQ Q21 spare-bit normalisation (alternating 0/1 starting
+with 0 in SB2 bits 1150–1175) is already applied — the bytes are
+self-describing ground truth.
+
+```
+inputs/
+├── frame_message_1_input.bin   # 2868 bytes — all-zero input
+├── frame_message_2_input.bin   #              all-one input
+├── frame_message_3_input.bin   #              alternating, start-with-1 (0xAA)
+├── frame_message_4_input.bin   #              bytewise marker, per-subframe restart
+├── frame_message_5_input.bin   #              xorshift32 (seed 0xAF52, single stream)
+└── frame_boundary_input.bin    #              alternating, start-with-0 (0x55)
+```
+
+Workflow for validating your encoder against the reference set:
+
+```bash
+# 1. Read inputs/frame_message_X_input.bin → feed SB2/SB3/SB4 to your encoder.
+# 2. Diff your encoder's output against ours:
+python validate.py diff-frames /path/to/your/frames/
+# Bit-exact agreement isolates correctness to the FEC pipeline alone.
+```
+
 ### Validator subcommands
 
 ```bash
@@ -144,9 +173,13 @@ python validate.py check-frames
 # Level 2 — second oracle (LANS-AFS-SIM frame dumps, bundled).
 python validate.py check-lans-afs-sim-frames
 
+# Level 2 — verify canonical-input files reproduce from the documented patterns.
+python validate.py check-canonical-inputs
+
 # Compare your implementation's output against this repo.
-python validate.py diff        /path/to/your/codes/
-python validate.py diff-frames /path/to/your/frames/
+python validate.py diff         /path/to/your/codes/
+python validate.py diff-frames  /path/to/your/frames/
+python validate.py diff-inputs  /path/to/your/inputs/
 
 # Re-hash everything to confirm the distribution is intact.
 python validate.py verify-manifest
@@ -197,7 +230,7 @@ uv run ruff format       # format
 uv run pytest            # full test suite — exercises every subcommand
 ```
 
-If you add or update any file under `codes/`, `frames/`, or `references/`,
+If you add or update any file under `codes/`, `frames/`, `inputs/`, or `references/`,
 refresh the integrity manifest before committing:
 
 ```bash
