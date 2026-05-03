@@ -11,14 +11,56 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 | Version | Ships |
 |:---|:---|
 | 0.1.0     | Level 1 |
-| **0.2.0** | + Level 2 (this release) |
+| 0.2.0     | + Level 2 |
+| **0.2.1** | + canonical pre-encode inputs (this release) |
 | 0.3.0     | + Level 3 |
 | 0.4.0     | + Level 4 |
 | 0.5.0     | + Level 5 (feature-complete) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
-Patch versions (e.g. 0.1.1) carry corrections to an already-shipped level
-without adding new ones.
+Patch versions (e.g. 0.1.1, 0.2.1) carry corrections or additional
+verification artefacts for an already-shipped level without adding new ones.
+
+## [0.2.1] — 2026-05-03
+
+Patch release — **canonical pre-encode inputs** for the Level-2 frames.
+
+### Added
+- `inputs/` — 6 canonical input files, one per shipped frame, containing the
+  exact SB2 + SB3 + SB4 bits the encoder consumed before BCH/CRC/LDPC/interleave.
+  Each file is 2868 bytes in unpacked form (1 byte per bit, value 0x00 / 0x01;
+  layout: 1176 SB2 + 846 SB3 + 846 SB4). FAQ Q21 spare-bit normalisation is
+  applied to SB2 bits 1150–1175 in every file, so the bytes are self-describing
+  ground truth — a contestant whose encoder consumes the file produces the
+  matching `frames/frame_*.bin` regardless of whether their encoder applies
+  Q21 internally.
+  - `frame_message_1_input.bin` — all-zero input
+  - `frame_message_2_input.bin` — all-one input
+  - `frame_message_3_input.bin` — alternating, start-with-1 (`0xAA`)
+  - `frame_message_4_input.bin` — bytewise marker (per-subframe restart)
+  - `frame_message_5_input.bin` — xorshift32, seed `0xAF52`, single stream
+    consumed across SB2 → SB3 → SB4
+  - `frame_boundary_input.bin` — alternating, start-with-0 (`0x55`)
+- `validate.py` gained three subcommands:
+  - `check-canonical-inputs` — verify the shipped input files reproduce
+    from the documented patterns + FAQ Q21 normalisation. Reports 6/6.
+  - `diff-inputs` — compare a directory of canonical-input files against
+    ours, with first-mismatch localised to `SB{n} bit {k}`.
+  - `build-canonical-inputs` — maintainer command, regenerates `inputs/`.
+- Manifest grew to **662 SHA256-hashed content files** (was 656).
+- `tests/test_validate.py` — 45 cases (was 37); 8 new cases cover the new
+  subcommands, file size invariants, and FAQ Q21 normalisation in inputs.
+- `pyproject.toml` packaging includes `inputs/` in wheel + sdist.
+
+### Workflow
+Implementers can now run a clean two-step encoder validation:
+1. Read `inputs/frame_message_X_input.bin` (canonical SB2/SB3/SB4 bytes).
+2. Feed into your encoder; compare the output against `frames/frame_message_X.bin`
+   via `python validate.py diff-frames /path/to/your/frames/`.
+
+Bit-exact agreement isolates correctness to the FEC pipeline alone — input-
+construction conventions (TM3 starting bit, TM4 marker stream, TM5 PRNG,
+FAQ Q21 spare bits) are no longer a source of cross-team disagreement.
 
 ## [0.2.0] — 2026-04-27
 

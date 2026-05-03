@@ -250,6 +250,111 @@ def test_check_lans_afs_sim_frames_handles_truncated_local_frame(
     assert rc == 1, "truncated local frame should be a failure, not a crash"
 
 
+# ─────────────────────────────── canonical inputs ──────────────────────────
+
+
+def test_check_canonical_inputs_passes() -> None:
+    result = run("check-canonical-inputs")
+    assert result.returncode == 0, result.stderr
+    assert "6/6" in result.stdout
+    assert "OK — all 6 canonical input files" in result.stdout
+
+
+def test_canonical_inputs_have_expected_size() -> None:
+    """Every canonical input file is exactly 2868 bytes (1176 SB2 + 846 SB3 + 846 SB4)."""
+    for filename, _pattern in validate.INPUT_TEST_VECTORS:
+        path = REPO_ROOT / "inputs" / filename
+        assert path.stat().st_size == validate.INPUT_BYTE_COUNT, (
+            f"{filename} is {path.stat().st_size} bytes, expected {validate.INPUT_BYTE_COUNT}"
+        )
+
+
+def test_canonical_inputs_carry_faq_q21_normalisation() -> None:
+    """SB2 bits 1150..1175 must hold the FAQ Q21 alternating-0/1 pattern in every file."""
+    expected_spare = bytes(i % 2 for i in range(validate.SB2_SPARE_BITS_LENGTH))
+    for filename, _pattern in validate.INPUT_TEST_VECTORS:
+        data = (REPO_ROOT / "inputs" / filename).read_bytes()
+        sb2 = data[: validate.SB2_BITS]
+        spare = sb2[
+            validate.SB2_SPARE_BITS_OFFSET : validate.SB2_SPARE_BITS_OFFSET
+            + validate.SB2_SPARE_BITS_LENGTH
+        ]
+        assert spare == expected_spare, (
+            f"{filename}: SB2 spare bits 1150..1175 do not match FAQ Q21 normalisation"
+        )
+
+
+def test_diff_inputs_self_is_clean() -> None:
+    """Comparing inputs/ against itself must report bit-exact match."""
+    result = run("diff-inputs", "inputs")
+    assert result.returncode == 0, result.stderr
+    assert "OK — bit-exact match" in result.stdout
+
+
+def test_diff_inputs_detects_mutation(tmp_path: Path) -> None:
+    """A deliberately-mutated copy must exit non-zero and localise the disagreement."""
+    mutated = tmp_path / "inputs-mutated"
+    shutil.copytree(REPO_ROOT / "inputs", mutated)
+
+    target = mutated / "frame_message_4_input.bin"
+    data = bytearray(target.read_bytes())
+    # Flip a SB2 byte well clear of the FAQ Q21 spare-bit window.
+    data[100] = 1 if data[100] == 0 else 0
+    target.write_bytes(bytes(data))
+
+    result = run("diff-inputs", str(mutated))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "frame_message_4_input" in combined
+    assert "SB2 bit 100" in combined
+
+
+def test_diff_inputs_missing_file_reported(tmp_path: Path) -> None:
+    """Dropping an input from the copy must show up as missing."""
+    partial = tmp_path / "inputs-partial"
+    shutil.copytree(REPO_ROOT / "inputs", partial)
+    (partial / "frame_boundary_input.bin").unlink()
+
+    result = run("diff-inputs", str(partial))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "frame_boundary_input" in combined or "missing: 1" in combined
+
+
+def test_diff_inputs_wrong_size_reported(tmp_path: Path) -> None:
+    """Wrong file size must produce a clean failure."""
+    truncated = tmp_path / "inputs-truncated"
+    shutil.copytree(REPO_ROOT / "inputs", truncated)
+
+    target = truncated / "frame_message_1_input.bin"
+    target.write_bytes(target.read_bytes()[:-1])  # 2867 bytes
+
+    result = run("diff-inputs", str(truncated))
+    assert result.returncode != 0
+    assert "expected 2868" in result.stderr
+
+
+def test_build_canonical_inputs_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running build-canonical-inputs twice produces the same bytes."""
+    target = tmp_path / "inputs"
+    monkeypatch.setattr(validate, "INPUTS_DIR", target)
+    rc = validate.cmd_build_canonical_inputs()
+    assert rc == 0
+    first = {p.name: p.read_bytes() for p in sorted(target.iterdir())}
+
+    rc = validate.cmd_build_canonical_inputs()
+    assert rc == 0
+    second = {p.name: p.read_bytes() for p in sorted(target.iterdir())}
+
+    assert first == second
+    # And what was just rebuilt must match what's shipped.
+    for name, data in first.items():
+        shipped = (REPO_ROOT / "inputs" / name).read_bytes()
+        assert data == shipped, f"{name}: rebuilt bytes do not match shipped file"
+
+
 # ─────────────────────────────── refresh ────────────────────────────────────
 
 
@@ -270,7 +375,8 @@ def test_manifest_structure() -> None:
     assert manifest["levels"] == [1, 2]  # grows as future drops land
     assert "oracles" in manifest
     assert len(manifest["oracles"]) >= 3  # L1 normative + L1/L2 LANS + L2 structural
-    assert len(manifest["files"]) >= 645  # 630 L1 + 6 frames + 6 LANS frames + readmes
+    # 630 L1 codes + 6 frames + 6 LANS frames + 6 canonical inputs + readmes
+    assert len(manifest["files"]) >= 651
 
 
 def test_manifest_covers_every_code_file() -> None:
@@ -348,8 +454,11 @@ def test_no_args_shows_help_and_errors() -> None:
         "check-lans-afs-sim",
         "check-frames",
         "check-lans-afs-sim-frames",
+        "check-canonical-inputs",
         "diff",
         "diff-frames",
+        "diff-inputs",
+        "build-canonical-inputs",
         "verify-manifest",
         "rebuild-manifest",
         "refresh",
