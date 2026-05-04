@@ -278,8 +278,8 @@ lifting) is fully cross-validated.
 
 ## Test message inputs
 
-The 6 frames cover the five public Level-2 message slots from
-`interoperability.pdf` plus one boundary case from *Test Case 4: Boundary
+The 7 frames cover the five public Level-2 message slots from
+`interoperability.pdf` plus two boundary cases from *Test Case 4: Boundary
 Conditions*. Where the interop doc leaves message content illustrative rather
 than machine-readable, this package pins a reproducible convention:
 
@@ -290,7 +290,27 @@ than machine-readable, this package pins a reproducible convention:
 | `frame_message_3.bin` | Alternating bits, start 1 (first packed byte 0xAA) | `10101010` | TM3 |
 | `frame_message_4.bin` | Bytewise marker (`0x00, 0x01, 0x02, …`) | `00000000` | TM4 surrogate (replaces "known ephemeris data") |
 | `frame_message_5.bin` | xorshift32 PRNG, seed=`0xAF52` | (seed-derived) | TM5 |
-| `frame_boundary.bin`  | Alternating, start 0 (first packed byte 0x55), max field values (PRN=210, FID=3, TOI=99) | `01010101` | Test Case 4 |
+| `frame_boundary.bin`  | Alternating, start 0 (first packed byte 0x55), header field maxima (PRN=210, FID=3, TOI=99) | `01010101` | Test Case 4 — FID/TOI/PRN maxima |
+| `frame_boundary_max_fields.bin` | All-ones SB2/SB3/SB4 with SB2[13..21] (ITOW field) clamped to 503 spec max; same FID=3, TOI=99, PRN=210 | `11111111` | Test Case 4 — WN=8191, ITOW=503 maxima (added v0.2.2) |
+
+### Why two boundary frames?
+
+`frame_boundary.bin` (shipped in v0.2.0) covers TC4's **header-field
+maxima**: PRN=210, FID=3, TOI=99.  Its SB2/SB3/SB4 use the alternating-
+start-with-0 pattern, which fills the WN field (SB2[0..12]) and the
+ITOW field (SB2[13..21]) with whatever that pattern produces — neither
+at minimum nor at maximum.
+
+`frame_boundary_max_fields.bin` (added in v0.2.2) covers TC4's
+**SB2-field maxima**: WN=8191 (the 13-bit raw maximum) and ITOW=503
+(the spec maximum per LSIS V1.0 §2.4.3.1.6 — the 9-bit raw max 511 is
+out-of-range and would be a TC5 case).  All other SB2/SB3/SB4 bits are
+all-ones.  Header fields stay at maxima (PRN=210, FID=3, TOI=99).
+
+Together the two frames exercise every TC4 boundary input listed in
+`interoperability.pdf` *except* PRN-210 at L3 (no spec-defined matched-
+code phase assignment for PRN > 12, see v0.3.0 §"Why no L3 boundary
+frame").
 
 ### TM4 bytewise marker convention
 
@@ -461,11 +481,29 @@ No header, no padding.  The unpacked-symbol convention matches
 | `frame_message_4_input.bin` | Bytewise marker: bit at position `i` is the MSB-first bit of byte `(i // 8) mod 256` within each subframe; subframes restart from byte `0x00` |
 | `frame_message_5_input.bin` | xorshift32 PRNG, seed `0xAF52`, single bitstream consumed across SB2 → SB3 → SB4 |
 | `frame_boundary_input.bin` | Alternating, `bit_i = i mod 2` (first packed byte `0x55`) |
+| `frame_boundary_max_fields_input.bin` | All-ones EXCEPT SB2 bits 13..21 (ITOW field) = `0b111110111` MSB-first (= 503, the spec max per LSIS V1.0 §2.4.3.1.6) — added v0.2.2 |
 
 After the pattern is filled into SB2, the FAQ Q21 normalisation overwrites
 SB2 bits 1150–1175 with `[0, 1, 0, 1, …]` regardless of pattern.  SB3 and
 SB4 are not touched by Q21 (no spare-bit ranges in those subframes for
 this normalisation).
+
+### `max_fields` ITOW override
+
+The `max_fields` pattern fills SB2/SB3/SB4 with all-ones, then explicitly
+clamps the 9-bit ITOW field at SB2[13..21] to `0b111110111` (= 503,
+MSB-first) before applying the FAQ Q21 normalisation.  All-ones in the
+ITOW field would yield 511, which the spec declares invalid (valid range
+0..503 per LSIS V1.0 §2.4.3.1.6) — that's TC5 (error conditions),
+not TC4 (boundary).  The constants `SB2_ITOW_OFFSET`, `SB2_ITOW_BITS`,
+and `SB2_ITOW_SPEC_MAX` in `validate.py` carry the spec field positions.
+
+Other field maxima reachable from this pattern:
+- **WN** (SB2[0..12], 13 bits): all-ones → WN = 8191 = 13-bit raw max ✓
+- **Health** (SB2[22..29], 8 bits): all-ones → Health = 255
+- **CED + time-conv fields** (SB2[30..1149]): all-ones; not field-boundary
+  semantics (these are quantised orbital parameters, not bounded counters)
+- **SB3, SB4**: all-ones throughout
 
 ## Reproducibility
 

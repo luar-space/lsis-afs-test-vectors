@@ -12,14 +12,66 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 |:---|:---|
 | 0.1.0     | Level 1 |
 | 0.2.0     | + Level 2 |
-| **0.2.1** | + canonical pre-encode inputs (this release) |
+| 0.2.1     | + canonical pre-encode inputs |
+| **0.2.2** | + Level-2 boundary frame with WN=8191 / ITOW=503 maxima (this release) |
 | 0.3.0     | + Level 3 |
 | 0.4.0     | + Level 4 |
 | 0.5.0     | + Level 5 (feature-complete) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
-Patch versions (e.g. 0.1.1, 0.2.1) carry corrections or additional
+Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
+
+## [0.2.2] — 2026-05-04
+
+Patch release — **TC4 max-field coverage at Level 2**.
+
+### Added
+- `frames/frame_boundary_max_fields.bin` (1 new L2 frame, 6064 bytes) — covers
+  the **WN=8191 (max) and ITOW=503 (spec max)** corners of interop-doc
+  Test Case 4 that the original `frame_boundary.bin` does **not** exercise.
+  The original boundary frame uses an alternating-start-with-0 SB2 pattern
+  that fills WN/ITOW with whatever that pattern produces, neither at minimum
+  nor at maximum; this is a documented L2-omission carried since v0.2.0.
+  The new frame keeps PRN=210, FID=3, TOI=99 (max field values) and adds the
+  SB2 field-maxima coverage by filling SB2/SB3/SB4 with all-ones EXCEPT the
+  9-bit ITOW field (SB2[13..21]) which is clamped to 503 (the spec maximum,
+  MSB-first `0b111110111`).  The 9-bit raw maximum 511 is invalid per LSIS
+  V1.0 §2.4.3.1.6 — it would land in TC5 territory (out-of-range), not TC4.
+  FAQ Q21 normalisation on SB2[1150..1175] continues to apply.
+- `inputs/frame_boundary_max_fields_input.bin` — matching canonical
+  pre-encode input file (2868 bytes, same format as the other 6 inputs).
+  Pattern name: `max_fields`.
+- `references/lans-afs-sim/frames/lans_frame_boundary_max_fields.bin` —
+  matching LANS-AFS-SIM second-oracle dump, regenerated from the bundled
+  harness against the same upstream SHA `0578f298ba68d8508ab7d780be843faed3e2b274`.
+- `references/lans-afs-sim/harnesses/dump_lans_frame.c` gained the
+  `max_fields` pattern + post-fill ITOW=503 override; `dump_l2_test_vectors.py`
+  now invokes the harness for 7 messages instead of 6.
+- `validate.py` extended:
+  - `FRAME_TEST_VECTORS` and `INPUT_TEST_VECTORS` each gain one entry.
+  - `_build_canonical_input` learns the `max_fields` pattern.
+  - New constants: `SB2_WN_OFFSET/_BITS`, `SB2_ITOW_OFFSET/_BITS`,
+    `SB2_ITOW_SPEC_MAX` for the field-position semantics.
+- Manifest grew to **665 SHA256-hashed content files** (was 662).
+- `tests/test_validate.py` — 48 cases (was 45); existing cases that asserted
+  `6/6` / `OK — all 6 frames…` were updated to `7/7` / `…all 7 frames…`.
+
+### Coverage matrix update
+
+| TC4 boundary dimension | v0.2.1 | v0.2.2 |
+|:---|:---:|:---:|
+| FID=3 (max — 2-bit field) | ✅ `frame_boundary.bin` | ✅ both boundary frames |
+| TOI=99 (max — 0..99 per spec) | ✅ `frame_boundary.bin` | ✅ both boundary frames |
+| **WN=8191 (max — 13-bit)** | ❌ | ✅ `frame_boundary_max_fields.bin` |
+| **ITOW=503 (spec max — 9-bit)** | ❌ | ✅ `frame_boundary_max_fields.bin` |
+| All-zeros minimum | ✅ `frame_message_1.bin` | ✅ `frame_message_1.bin` |
+| PRN=210 (max field — header only) | ✅ both boundary frames at L2 | (L3 not signal-realisable; see v0.3.0) |
+
+### Correctness
+- **Oracle 1 — LSIS V1.0 §2.4 structural** (L2): 7/7 frames pass `check-frames`.
+- **Oracle 2 — LANS-AFS-SIM** (L2 independent): 7/7 frames bit-exact against
+  upstream SHA `0578f298ba68d8508ab7d780be843faed3e2b274` rebuild.
 
 ## [0.2.1] — 2026-05-03
 

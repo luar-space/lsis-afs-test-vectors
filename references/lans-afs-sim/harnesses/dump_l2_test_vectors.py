@@ -35,6 +35,8 @@ TEST_MESSAGES: list[tuple[str, int, int, str, int | None]] = [
     ("message_4", 0, 0, "marker", None),
     ("message_5", 0, 0, "random", 0xAF52),
     ("boundary", 3, 99, "alternating", None),
+    # v0.2.2 — TC4 max-field corner with ITOW clamped to spec max 503.
+    ("boundary_max_fields", 3, 99, "max_fields", None),
 ]
 
 

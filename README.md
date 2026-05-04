@@ -87,7 +87,7 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.2.1` (Levels 1 + 2 + canonical pre-encode inputs)
+## Current release — `v0.2.2` (Levels 1 + 2 + canonical inputs + boundary-max-fields patch)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
@@ -108,13 +108,13 @@ competition interoperability document:
 [SECONDARY_S0..3]  # 4-bit AFS-Q secondaries (E, 7, B, D), per Annex 3 Table 2
 ```
 
-### Level 2 — encoded frames (6 frames)
+### Level 2 — encoded frames (7 frames)
 
-Six `frames/frame_*.bin` files exercise the BCH(51,8) + CRC-24Q + LDPC(1/2)
+Seven `frames/frame_*.bin` files exercise the BCH(51,8) + CRC-24Q + LDPC(1/2)
 + 60×98 interleaver pipeline per LSIS V1.0 §2.4. Each file is **6064 bytes**:
 a 64-byte `LSISAFS\0` header (per the interop doc) followed by 6000 unpacked
 symbols. The set covers the interop doc's five public Level-2 message slots
-plus one boundary frame from Test Case 4; `frame_message_4.bin` intentionally
+plus two boundary frames from Test Case 4; `frame_message_4.bin` intentionally
 uses a documented bytewise marker surrogate rather than realistic ephemeris:
 
 | File | PRN | FID | TOI | Input pattern |
@@ -124,7 +124,8 @@ uses a documented bytewise marker surrogate rather than realistic ephemeris:
 | `frame_message_3.bin` |   1 | 0 |  0 | alternating bits (first byte 0xAA, matches interop doc TM3) |
 | `frame_message_4.bin` |   1 | 0 |  0 | bytewise marker (`0x00, 0x01, …`) — restarts per subframe |
 | `frame_message_5.bin` |   1 | 0 |  0 | xorshift32 PRNG, seed = `0xAF52` |
-| `frame_boundary.bin`  | 210 | 3 | 99 | alternating (PRN/FID/TOI at max) |
+| `frame_boundary.bin`  | 210 | 3 | 99 | alternating-start-0 (header-field maxima: PRN/FID/TOI) |
+| `frame_boundary_max_fields.bin`  | 210 | 3 | 99 | all-ones SB with ITOW=503 (SB2-field maxima: WN=8191, ITOW=503) — added v0.2.2 |
 
 Marker patterns rather than realistic ephemeris: encoder bit-exactness is
 content-agnostic, and the exact substitutions/conventions are documented in
@@ -141,12 +142,13 @@ self-describing ground truth.
 
 ```
 inputs/
-├── frame_message_1_input.bin   # 2868 bytes — all-zero input
-├── frame_message_2_input.bin   #              all-one input
-├── frame_message_3_input.bin   #              alternating, start-with-1 (0xAA)
-├── frame_message_4_input.bin   #              bytewise marker, per-subframe restart
-├── frame_message_5_input.bin   #              xorshift32 (seed 0xAF52, single stream)
-└── frame_boundary_input.bin    #              alternating, start-with-0 (0x55)
+├── frame_message_1_input.bin           # 2868 bytes — all-zero input
+├── frame_message_2_input.bin           #              all-one input
+├── frame_message_3_input.bin           #              alternating, start-with-1 (0xAA)
+├── frame_message_4_input.bin           #              bytewise marker, per-subframe restart
+├── frame_message_5_input.bin           #              xorshift32 (seed 0xAF52, single stream)
+├── frame_boundary_input.bin            #              alternating, start-with-0 (0x55)
+└── frame_boundary_max_fields_input.bin #              all-ones with ITOW=503 (SB2-field maxima)
 ```
 
 Workflow for validating your encoder against the reference set:

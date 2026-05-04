@@ -124,6 +124,13 @@ FRAME_TEST_VECTORS: list[tuple[str, int, int, int]] = [
     ("frame_message_4.bin", 1, 0, 0),
     ("frame_message_5.bin", 1, 0, 0),
     ("frame_boundary.bin", 210, 3, 99),
+    # v0.2.2 — covers TC4 max-field dimensions the original boundary frame
+    # does NOT exercise (WN=8191 in SB2[0..12], ITOW=503 in SB2[13..21]).
+    # Same FID/TOI/PRN as frame_boundary.bin (max field maxima); SB2/SB3/SB4
+    # = all-ones EXCEPT the 9-bit ITOW field clamped to its spec maximum 503
+    # (bits SB2[13..21] = 0b111110111 MSB-first; raw 9-bit max would be 511,
+    # which is invalid per LSIS V1.0 §2.4.3.1.6 — TC5 territory, not TC4).
+    ("frame_boundary_max_fields.bin", 210, 3, 99),
 ]
 
 
@@ -166,7 +173,18 @@ INPUT_TEST_VECTORS: list[tuple[str, str]] = [
     ("frame_message_4_input.bin", "marker"),
     ("frame_message_5_input.bin", "xorshift32"),
     ("frame_boundary_input.bin", "alternating0"),
+    ("frame_boundary_max_fields_input.bin", "max_fields"),
 ]
+
+
+# Spec-defined SB2 field positions (LSIS V1.0 §2.4.3.1.6 / LSIS-FID0-520):
+# WN occupies bits 0..12 (13 bits, MSB-first); ITOW occupies bits 13..21
+# (9 bits, MSB-first).  ITOW's spec maximum is 503, not the 9-bit raw 511.
+SB2_WN_OFFSET = 0
+SB2_WN_BITS = 13
+SB2_ITOW_OFFSET = 13
+SB2_ITOW_BITS = 9
+SB2_ITOW_SPEC_MAX = 503
 
 
 def _xorshift32_bits(seed: int, count: int) -> list[int]:
@@ -224,6 +242,19 @@ def _build_canonical_input(name: str) -> bytes:
         sb2 = all_bits[:SB2_BITS]
         sb3 = all_bits[SB2_BITS : SB2_BITS + SB3_BITS]
         sb4 = all_bits[SB2_BITS + SB3_BITS :]
+    elif name == "max_fields":
+        # All-ones in every SB EXCEPT the 9-bit ITOW field (SB2[13..21]) which
+        # is clamped to ITOW=503 (the spec maximum, MSB-first 0b111110111).
+        # The 9-bit raw maximum 511 is invalid per LSIS V1.0 §2.4.3.1.6 and
+        # would land in TC5 territory (out-of-range), not TC4 (boundary).
+        # WN (SB2[0..12]) stays at its 13-bit raw max 8191; all other SB2
+        # fields (Health, CED, time-conv) are at all-ones; SB3 + SB4 are at
+        # all-ones too.
+        sb2 = [1] * SB2_BITS
+        sb3 = [1] * SB3_BITS
+        sb4 = [1] * SB4_BITS
+        for i in range(SB2_ITOW_BITS):
+            sb2[SB2_ITOW_OFFSET + i] = (SB2_ITOW_SPEC_MAX >> (SB2_ITOW_BITS - 1 - i)) & 1
     else:
         raise ValueError(f"Unknown canonical-input pattern: {name!r}")
 

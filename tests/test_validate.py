@@ -54,15 +54,15 @@ def test_check_lans_afs_sim_passes() -> None:
 def test_check_frames_passes() -> None:
     result = run("check-frames")
     assert result.returncode == 0, result.stderr
-    assert "6/6" in result.stdout
-    assert "OK — all 6 frames pass spec structural checks" in result.stdout
+    assert "7/7" in result.stdout
+    assert "OK — all 7 frames pass spec structural checks" in result.stdout
 
 
 def test_check_lans_afs_sim_frames_passes() -> None:
     result = run("check-lans-afs-sim-frames")
     assert result.returncode == 0, result.stderr
-    assert "6/6" in result.stdout
-    assert "OK — all 6 frames bit-exact against LANS-AFS-SIM" in result.stdout
+    assert "7/7" in result.stdout
+    assert "OK — all 7 frames bit-exact against LANS-AFS-SIM" in result.stdout
 
 
 def test_check_frames_counts_only_clean_frames(
@@ -84,7 +84,7 @@ def test_check_frames_counts_only_clean_frames(
     captured = capsys.readouterr()
 
     assert rc == 1
-    assert "Structural checks:  5/6" in captured.out
+    assert "Structural checks:  6/7" in captured.out
     assert "do not match sync pattern" in captured.err
 
 
@@ -124,7 +124,7 @@ def test_check_frames_catches_header_mutation(
     captured = capsys.readouterr()
 
     assert rc == 1, f"check-frames failed to flag a corrupted {label} byte at offset {offset}"
-    assert "Structural checks:  5/6" in captured.out
+    assert "Structural checks:  6/7" in captured.out
     assert expected in captured.err, (
         f"{label} mutation produced unexpected stderr: {captured.err!r}"
     )
@@ -256,8 +256,8 @@ def test_check_lans_afs_sim_frames_handles_truncated_local_frame(
 def test_check_canonical_inputs_passes() -> None:
     result = run("check-canonical-inputs")
     assert result.returncode == 0, result.stderr
-    assert "6/6" in result.stdout
-    assert "OK — all 6 canonical input files" in result.stdout
+    assert "7/7" in result.stdout
+    assert "OK — all 7 canonical input files" in result.stdout
 
 
 def test_canonical_inputs_have_expected_size() -> None:
@@ -375,8 +375,8 @@ def test_manifest_structure() -> None:
     assert manifest["levels"] == [1, 2]  # grows as future drops land
     assert "oracles" in manifest
     assert len(manifest["oracles"]) >= 3  # L1 normative + L1/L2 LANS + L2 structural
-    # 630 L1 codes + 6 frames + 6 LANS frames + 6 canonical inputs + readmes
-    assert len(manifest["files"]) >= 651
+    # 630 L1 codes + 7 frames + 7 LANS frames + 7 canonical inputs + readmes
+    assert len(manifest["files"]) >= 654
 
 
 def test_manifest_covers_every_code_file() -> None:
@@ -483,7 +483,7 @@ def test_rebuild_manifest_is_idempotent(tmp_path: Path) -> None:
     # Structural checks on the regenerated file
     after = json.loads((REPO_ROOT / "manifest.json").read_text())
     assert after["levels"] == [1, 2]
-    assert len(after["files"]) >= 645
+    assert len(after["files"]) >= 648
     # Restore the original manifest so the test has no side-effect on other tests
     (REPO_ROOT / "manifest.json").write_text(before)
     _ = tmp_path  # unused — reserved for future symlink isolation if needed

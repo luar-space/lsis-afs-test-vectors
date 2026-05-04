@@ -19,8 +19,8 @@ keywords:
   - ESA
   - test-vectors
   - interoperability
-version: "0.2.1"
-date-released: "2026-05-03"
+version: "0.2.2"
+date-released: "2026-05-04"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
@@ -28,18 +28,19 @@ abstract: >-
   Signal-In-Space Augmented Forward Signal) specification, Version 1.0
   (29 January 2025). Targets the five test levels defined in the
   competition interoperability plan, shipped incrementally as drops to
-  the same repository.  Version 0.2.1 covers Levels 1 and 2 plus the
+  the same repository.  Version 0.2.2 covers Levels 1 and 2 plus the
   canonical pre-encode SB2/SB3/SB4 input bytes that produced each
   Level-2 frame.  Level 1 ships all 210 PRN spreading codes — Gold
   (AFS-I primary), Weil 10230 (AFS-Q primary), Weil 1500 (tertiary) and
   the four AFS-Q secondary codes — in the standardized hex format,
   bit-exact against LNIS AD1 Volume A Annex 3 (normative reference) and
-  against LANS-AFS-SIM (independent second oracle).  Level 2 ships six
+  against LANS-AFS-SIM (independent second oracle).  Level 2 ships seven
   encoded-frame vectors covering the five Test Messages prescribed by
-  the interoperability plan plus one boundary frame from Test Case 4,
-  validated against LSIS V1.0 §2.4 structural rules and LANS-AFS-SIM
-  bit-exact frame dumps.  v0.2.1 additionally ships canonical
-  pre-encode input bytes (one file per frame, FAQ Q21 spare-bit
+  the interoperability plan plus two boundary frames from Test Case 4
+  (header-field maxima PRN=210/FID=3/TOI=99 and SB2-field maxima
+  WN=8191/ITOW=503), validated against LSIS V1.0 §2.4 structural rules
+  and LANS-AFS-SIM bit-exact frame dumps.  Each frame ships with a
+  matching canonical pre-encode input file (FAQ Q21 spare-bit
   normalisation applied) so any team can feed the documented inputs
   into their encoder and bit-compare the output against the shipped
   frames — isolating correctness to the FEC pipeline alone.  Apache-2.0
