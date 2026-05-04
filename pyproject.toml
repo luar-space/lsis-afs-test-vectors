@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lsis-afs-test-vectors"
-version = "0.2.2"
-description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.2.2 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames), and the canonical pre-encode SB2/SB3/SB4 input bytes that produced each frame — letting any team feed the documented inputs into their encoder and bit-compare against the shipped frames. v0.2.2 adds frame_boundary_max_fields.bin which exercises the WN=8191 / ITOW=503 maxima the original boundary frame did not. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), and the LSIS V1.0 §2.4 structural rules. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
+version = "0.3.0"
+description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.3.0 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames) plus their canonical pre-encode SB2/SB3/SB4 input bytes, and Level 3 baseband I/Q signals (9 × 12 s @ 10.23 MHz, gzipped) generated from the matching L2 frames. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), the LSIS V1.0 §2.4 structural rules, and a first-chip polarity oracle that chains L1 codes + L2 sync prefix into L3. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -39,6 +39,7 @@ only-include = [
     "codes",
     "frames",
     "inputs",
+    "signals",
     "references",
     "manifest.json",
     "README.md",
@@ -53,6 +54,7 @@ only-include = [
     "codes",
     "frames",
     "inputs",
+    "signals",
     "references",
     "manifest.json",
     "README.md",
@@ -65,10 +67,18 @@ only-include = [
     ".github/workflows/verify.yml",
 ]
 
+[project.optional-dependencies]
+# Optional speedup for `check-signals` (L3 full-range scan): the stdlib path
+# uses bytes.count over a 982 MB payload (~3 s per file). With numpy installed,
+# the same check runs as a vectorised uint32 mask (~0.3 s per file).
+fast = ["numpy>=1.20"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    # CI gets the fast path; end-users opt in via `pip install ...[fast]`.
+    "numpy>=1.20",
 ]
 
 [tool.ruff]
@@ -89,7 +99,9 @@ select = [
 ignore = [
     "PLR2004",         # magic numbers are fine in a validator of fixed-length formats
     "PLR0913",         # "too many arguments" — argparse callbacks set by design
-    "RUF002",          # `×` in docstrings/comments is intentional (math notation)
+    "RUF001",          # `×` in user-facing strings is intentional (math notation)
+    "RUF002",          # `×` in docstrings is intentional (math notation)
+    "RUF003",          # `×` in comments is intentional (math notation)
 ]
 
 [tool.ruff.format]

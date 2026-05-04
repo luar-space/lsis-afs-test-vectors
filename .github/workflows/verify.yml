@@ -43,5 +43,8 @@ jobs:
       - name: check-canonical-inputs (L2 pre-encode reproducibility)
         run: uv run lsis-afs-validate check-canonical-inputs
 
+      - name: check-signals (L3 structural + first-chip polarity oracle)
+        run: uv run lsis-afs-validate check-signals
+
       - name: verify-manifest
         run: uv run lsis-afs-validate verify-manifest
