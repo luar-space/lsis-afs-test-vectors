@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lsis-afs-test-vectors"
-version = "0.2.1"
-description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.2.1 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 1 boundary frame), and the canonical pre-encode SB2/SB3/SB4 input bytes that produced each frame — letting any team feed the documented inputs into their encoder and bit-compare against the shipped frames. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), and the LSIS V1.0 §2.4 structural rules. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
+version = "0.2.2"
+description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.2.2 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames), and the canonical pre-encode SB2/SB3/SB4 input bytes that produced each frame — letting any team feed the documented inputs into their encoder and bit-compare against the shipped frames. v0.2.2 adds frame_boundary_max_fields.bin which exercises the WN=8191 / ITOW=503 maxima the original boundary frame did not. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), and the LSIS V1.0 §2.4 structural rules. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"

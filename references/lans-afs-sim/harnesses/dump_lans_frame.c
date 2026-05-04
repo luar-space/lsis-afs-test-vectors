@@ -14,7 +14,7 @@
  *
  * Usage: dump_lans_frame <outdir> <name> <fid> <toi> <pattern> [seed]
  *   name     : output basename (file is lans_frame_<name>.bin)
- *   pattern  : "zeros" | "ones" | "alternating" | "alternating1" | "marker" | "random"
+ *   pattern  : "zeros" | "ones" | "alternating" | "alternating1" | "marker" | "random" | "max_fields"
  *   seed     : xorshift32 seed for the "random" pattern (default 0xAF52)
  *
  * Patterns:
@@ -61,9 +61,25 @@ static void fill_pattern(uint8_t* buf, int len, const char* pattern)
             int bit_pos = i % 8;
             buf[i] = (uint8_t)((byte_val >> (7 - bit_pos)) & 1u);
         }
+    } else if (strcmp(pattern, "max_fields") == 0) {
+        /* All-ones, with caller-side override of ITOW after this fill. */
+        memset(buf, 1, len);
     } else {
         fprintf(stderr, "Unknown per-subframe pattern: %s\n", pattern);
         exit(1);
+    }
+}
+
+/* Override SB2 bits 13..21 (ITOW field, 9 bits MSB-first) with the spec
+ * maximum 503 = 0b111110111.  Used by the "max_fields" pattern; raw 9-bit
+ * max 511 is invalid per LSIS V1.0 §2.4.3.1.6 (TC5, not TC4). */
+static void apply_itow_spec_max(uint8_t* sb2)
+{
+    static const int ITOW_OFFSET = 13;
+    static const int ITOW_BITS = 9;
+    static const int ITOW_SPEC_MAX = 503;
+    for (int i = 0; i < ITOW_BITS; i++) {
+        sb2[ITOW_OFFSET + i] = (uint8_t)((ITOW_SPEC_MAX >> (ITOW_BITS - 1 - i)) & 1u);
     }
 }
 
@@ -92,7 +108,7 @@ int main(int argc, char** argv)
         fprintf(stderr,
                 "Usage: dump_lans_frame <outdir> <name> <fid> <toi> "
                 "<pattern> [seed]\n"
-                "  pattern: zeros | ones | alternating | alternating1 | marker | random\n"
+                "  pattern: zeros | ones | alternating | alternating1 | marker | random | max_fields\n"
                 "  seed   : xorshift32 seed for 'random' (default 0xAF52)\n");
         return 1;
     }
@@ -130,6 +146,11 @@ int main(int argc, char** argv)
         fill_pattern(sb2_info, 1176, pattern);
         fill_pattern(sb3_info, 846, pattern);
         fill_pattern(sb4_info, 846, pattern);
+    }
+
+    /* Pattern-specific SB2 field overrides (after fill_pattern has run). */
+    if (strcmp(pattern, "max_fields") == 0) {
+        apply_itow_spec_max(sb2_info);
     }
 
     /* Subframe 2: 1176 data + 24 CRC = 1200 info -> 2400 coded.
