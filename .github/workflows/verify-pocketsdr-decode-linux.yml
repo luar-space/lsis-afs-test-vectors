@@ -1,0 +1,76 @@
+name: verify-pocketsdr-decode-linux
+
+# End-to-end Linux verification of the L4 PocketSDR-AFS decode oracle.
+#
+# v0.4.0 was authored on macOS (Apple Clang 17).  The PR-CI workflow
+# (`.github/workflows/verify.yml`) only runs the cheap `check-decode`
+# subcommand, which compares the shipped decoded outputs to frames/
+# and inputs/ bytewise.  That doesn't prove the bundled patches apply
+# under g++ on Linux, that the decoder builds end-to-end against
+# Ubuntu's libfftw3-dev / libusb-1.0-0-dev, or that the receiver's
+# output is platform-deterministic at the byte level.
+#
+# This workflow does the full clone → patch → build → decode + compare
+# chain on `ubuntu-latest`.  It runs:
+#
+#   - on tag pushes (so every release is gated on a green Linux verify),
+#   - manually via workflow_dispatch (for exploring upstream-SHA bumps),
+#   - weekly on a Sunday-night cron (catches upstream-toolchain drift
+#     even if we don't tag in a given week).
+#
+# Wall-clock is ~5–10 min; not run on every PR.  Designed to fail
+# loudly on any of: missing apt deps, patch-apply rejection, build
+# failure, decode mismatch, or platform-dependent receiver output.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 0"  # 03:00 UTC every Sunday
+
+jobs:
+  verify-pocketsdr-decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync project (with numpy fast-path)
+        run: uv sync --locked
+
+      - name: Install build dependencies (fftw3 + libusb)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libfftw3-dev \
+            libusb-1.0-0-dev \
+            git \
+            make
+
+      - name: Show toolchain
+        run: |
+          g++ --version
+          make --version | head -1
+          dpkg -s libfftw3-dev | grep -E '^(Package|Version):'
+          dpkg -s libusb-1.0-0-dev | grep -E '^(Package|Version):'
+
+      - name: Run end-to-end PocketSDR-AFS decode oracle (incl. determinism check)
+        run: |
+          uv run python references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py \
+            --check-determinism \
+            --timeout 240
+        # Expected: exits 0 with both oracles 10/10 + determinism check OK.
+        # Failure modes that would surface here but not in PR CI:
+        #   - patches don't apply under g++ (vs clang on macOS)
+        #   - lib/build/{librtk,libldpc,libfec,libsdr}.mk Linux paths broken
+        #   - pocket_trk segfaults under glibc / libfftw3-dev
+        #   - decoder output differs byte-for-byte vs what we shipped
+        #     from macOS (would expose a platform-dependence bug)

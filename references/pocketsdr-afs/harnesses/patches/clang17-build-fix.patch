@@ -1,0 +1,41 @@
+Apple Clang 17+ build fix: rename static satpos in sdr_pvt_afs.c
+
+Bundled with the LSIS-AFS Test Vectors v0.4.0 release.  Apple Clang 17
+(shipped with macOS Command Line Tools 15.x / Xcode 17 onwards)
+upgraded "static declaration of 'satpos' follows non-static
+declaration" from a warning to a hard error, breaking PocketSDR-AFS's
+libsdr.a build because src/sdr_pvt_afs.c declares a file-static
+satpos() whose name shadows RTKLIB's exported int satpos(...) in
+lib/RTKLIB/src/rtklib.h (different signatures).
+
+This patch renames the file-local helper to satpos_afs and updates its
+single in-file call site.  No semantic change.  Independent of the
+test-vector cross-decode functionality, but required for clean builds
+on contemporary macOS.
+
+Pinned upstream SHA: 5b23809f30d68518b7fad7a564fd0fac57cc497d.
+
+License: BSD-2-Clause (matches the upstream PocketSDR-AFS license).
+
+---
+diff --git a/src/sdr_pvt_afs.c b/src/sdr_pvt_afs.c
+--- a/src/sdr_pvt_afs.c
++++ b/src/sdr_pvt_afs.c
+@@ -89,7 +89,7 @@ void xyz2llh(const double *xyz, double *llh)
+ 
+     return;
+ }
+-static void satpos(ephem_t eph, gpstime_t g, double* pos, double* vel, double* clk)
++static void satpos_afs(ephem_t eph, gpstime_t g, double* pos, double* vel, double* clk)
+ {
+     double tk;
+     double mk;
+@@ -215,7 +215,7 @@ static double computeRange(ephem_t eph, gpstime_t t_rcv, double xyz[], double dt
+     }
+ 
+     // SV position at time of the pseudorange observation.
+-    satpos(eph, g, pos, vel, clk);
++    satpos_afs(eph, g, pos, vel, clk);
+ 
+     // Receiver to satellite vector and light-time.
+     subVect(los, pos, xyz);

@@ -1,0 +1,236 @@
+Add -dump-symbols and -dump-fec flags to pocket_trk for LSIS-AFS interop test vectors
+
+Bundled with the LSIS-AFS Test Vectors v0.4.0 release.  Adds two opt-in
+CLI flags to pocket_trk and one small bypass that lets the FEC dump
+cover all FIDs:
+
+  -dump-symbols <path>  Emit the raw 6000-symbol AFS-D payload (sync
+                        prefix + SB1 + interleaved SB2/SB3/SB4) to a
+                        file as one uint8 per symbol (value 0 or 1, no
+                        header, append-on-each-frame).  Hooks at the
+                        entry of decode_AFSD_frame() — the latest point
+                        at which the received symbol stream is still in
+                        on-air (pre-deinterleave) order.  Polarity is
+                        normalised via XOR with the receiver's chosen
+                        lock polarity (`rev`) so the output always
+                        matches the canonical transmit-side stream.
+                        These bytes are byte-equivalent to
+                        frames/frame_*.bin[64:6064] in the LSIS-AFS
+                        test-vectors repo (channel-bit oracle).
+
+  -dump-fec <path>      Emit the post-LDPC, post-CRC SB2 + SB3 + SB4
+                        data bits (1176 + 846 + 846 = 2868 bytes per
+                        successful frame, no CRC trailers, no header).
+                        Hooks immediately after each subframe's
+                        sdr_decode_LDPC_AFS_SF{2,3} + test_CRC succeeds.
+                        These bytes are byte-equivalent to
+                        inputs/frame_*_input.bin in the LSIS-AFS
+                        test-vectors repo (post-FEC bit oracle).
+
+Companion change in decode_AFSD_frame: upstream's sync_AFS_SF1_FID0
+only matches FID=0 SB1 codewords; for FID>0 frames (e.g. the LSIS-AFS
+test-vectors at FID=3), the function bails before LDPC with "TOI NOT
+FOUND".  The LDPC and CRC stages are FID-agnostic block codes, so
+SB2/SB3/SB4 still decode correctly given the (FID-independent) sync
+polarity already determined upstream by sync_frame().  When -dump-fec
+is set, we therefore proceed past the SB1 search with a dummy toi=0
+so the FEC dump covers all FIDs.  Receiver PVT/TOW state ends up wrong
+for those frames (toi is used downstream in update_tow()), which the
+LSIS-AFS test-vectors verifier does not consume.  When -dump-fec is
+NOT set, upstream behaviour is restored exactly.
+
+Together these three changes exercise the full receive chain
+end-to-end: acquisition + tracking + sync detection + symbol
+demodulation (-dump-symbols) + deinterleave + LDPC + CRC validation
+(-dump-fec, all FIDs).  Every layer's output is bit-exactly comparable
+to the corresponding shipped test vector.
+
+Pinned upstream SHA: 5b23809f30d68518b7fad7a564fd0fac57cc497d.
+
+The patch is intentionally narrow (two CLI flags + four fwrite hooks +
+two global FILE*s + one FID-bypass) so it survives minor upstream
+churn.  The patch is NOT submitted upstream; it lives only in the
+LSIS-AFS Test Vectors harness and is applied at build time by
+verify_pocketsdr_decode.py.
+
+License: BSD-2-Clause (matches the upstream PocketSDR-AFS license).
+
+---
+diff --git a/app/pocket_trk/pocket_trk.c b/app/pocket_trk/pocket_trk.c
+--- a/app/pocket_trk/pocket_trk.c
++++ b/app/pocket_trk/pocket_trk.c
+@@ -37,12 +37,16 @@
+ #define ESC_VCUR   "\033[?25h"  // ANSI escape show cursor
+ #define ESC_HCUR   "\033[?25l"  // ANSI escape hide cursor
+ 
++// LSIS-AFS interop: defined in src/sdr_nav.c; opened here from -dump-symbols / -dump-fec.
++extern FILE *sdr_dump_syms_fp;
++extern FILE *sdr_dump_fec_fp;
++
+ // usage text ------------------------------------------------------------------
+ static const char *usage_text[] = {
+     "Usage: pocket_trk [-sig sig -prn prn[,...] ...] [-fmt {INT8|INT8X2|RAW8|RAW16}]",
+     "       [-f freq] [-fo freq[,...]] [-IQ {1|2}[,...]] [-toff toff] [-ti tint]",
+     "       [-p bus,[,port] [-c conf_file] [-log path] [-nmea path] [-rtcm path]",
+-    "       [-raw path] [-w file] [file]", NULL
++    "       [-raw path] [-dump-symbols path] [-dump-fec path] [-w file] [file]", NULL
+ };
+ 
+ // interrupt flag --------------------------------------------------------------
+@@ -211,6 +215,8 @@ int main(int argc, char **argv)
+     const char *sig = "L1CA", *sigs[SDR_MAX_NCH];
+     const char *file = "", *fftw_wisdom = FFTW_WISDOM, *conf_file = "";
+     const char *paths[4] = {"", "", "", ""}, *debug_file = "";
++    const char *dump_syms_path = ""; // LSIS-AFS interop: -dump-symbols <path>
++    const char *dump_fec_path = "";  // LSIS-AFS interop: -dump-fec <path>
+     int inv_q = 0; // Inverse Q sign flag
+ 
+     for (int i = 1; i < argc; i++) {
+@@ -279,6 +285,12 @@ int main(int argc, char **argv)
+         else if (!strcmp(argv[i], "-raw") && i + 1 < argc) {
+             paths[3] = argv[++i];
+         }
++        else if (!strcmp(argv[i], "-dump-symbols") && i + 1 < argc) {
++            dump_syms_path = argv[++i]; // LSIS-AFS interop
++        }
++        else if (!strcmp(argv[i], "-dump-fec") && i + 1 < argc) {
++            dump_fec_path = argv[++i]; // LSIS-AFS interop
++        }
+         else if (!strcmp(argv[i], "-debug") && i + 1 < argc) {
+             debug_file = argv[++i];
+         }
+@@ -296,6 +308,18 @@ int main(int argc, char **argv)
+         traceopen(debug_file);
+         tracelevel(TRACE_LEVEL);
+     }
++    if (*dump_syms_path) {
++        sdr_dump_syms_fp = fopen(dump_syms_path, "wb");
++        if (!sdr_dump_syms_fp) {
++            fprintf(stderr, "cannot open dump-symbols file: %s\n", dump_syms_path);
++        }
++    }
++    if (*dump_fec_path) {
++        sdr_dump_fec_fp = fopen(dump_fec_path, "wb");
++        if (!sdr_dump_fec_fp) {
++            fprintf(stderr, "cannot open dump-fec file: %s\n", dump_fec_path);
++        }
++    }
+     sdr_func_init(fftw_wisdom);
+     
+     signal(SIGTERM, sig_func);
+@@ -340,6 +364,14 @@ int main(int argc, char **argv)
+     }
+     sdr_rcv_close(rcv);
+     
++    if (sdr_dump_syms_fp) {
++        fclose(sdr_dump_syms_fp);
++        sdr_dump_syms_fp = NULL;
++    }
++    if (sdr_dump_fec_fp) {
++        fclose(sdr_dump_fec_fp);
++        sdr_dump_fec_fp = NULL;
++    }
+     if (*debug_file) {
+         traceclose();
+     }
+diff --git a/src/sdr_nav.c b/src/sdr_nav.c
+--- a/src/sdr_nav.c
++++ b/src/sdr_nav.c
+@@ -111,6 +111,14 @@ static uint8_t *IRNV1_SF1 [400] = {NULL};
+ static uint8_t afsd_sp[9] ={0xCC, 0x63, 0xF7, 0x45, 0x36, 0xF4, 0x9E, 0x04, 0xA0}; // left justified
+ static uint8_t *AFSD_SP_SYMS = NULL;
+ 
++// LSIS-AFS interop (v0.4.x test-vector cross-decode): file pointers for
++// raw on-air channel-symbol dump (-dump-symbols) and post-LDPC/post-CRC
++// SB2/SB3/SB4 bit dump (-dump-fec).  Set by pocket_trk.c when the
++// matching CLI flag is passed; consumed inside decode_AFSD_frame().
++// NULL disables each dump independently.
++FILE *sdr_dump_syms_fp = NULL;
++FILE *sdr_dump_fec_fp  = NULL;
++
+ // TEB: AFS data subframe 1 symbols --------------------------------------------
+ static uint8_t *AFS_SF1[100] = {NULL};
+ 
+@@ -2102,6 +2110,20 @@ int sync_AFS_SF1_FID0(sdr_ch_t *ch, uint8_t *syms, int toi)
+ // decode AFSD frame -----------------------------------------------------------
+ static void decode_AFSD_frame(sdr_ch_t *ch, uint8_t *syms, int rev)
+ {
++    // LSIS-AFS interop: dump raw on-air 6000-symbol payload (sync prefix
++    // + SB1 + interleaved SB2/SB3/SB4) before deinterleaving / LDPC.  This
++    // is the symbol stream that the LSIS-AFS test-vector frames/frame_*.bin
++    // file ships in bytes 64..6063 (after the 64-byte LSISAFS header).
++    // Polarity-normalise via XOR with `rev` so the output always matches
++    // the canonical transmit-side stream regardless of the receiver's
++    // chosen lock polarity.
++    if (sdr_dump_syms_fp != NULL) {
++        uint8_t dump_buf[6000];
++        for (int n = 0; n < 6000; n++) dump_buf[n] = syms[n] ^ (uint8_t)rev;
++        fwrite(dump_buf, 1, 6000, sdr_dump_syms_fp);
++        fflush(sdr_dump_syms_fp);
++    }
++
+     double time = ch->time;
+     int toi,itow;
+ 
+@@ -2118,9 +2140,20 @@ static void decode_AFSD_frame(sdr_ch_t *ch, uint8_t *syms, int rev)
+             break;
+     }
+     if (toi == 100) { // TOI is not found
+-        unsync_nav(ch);
+-        sdr_log(3, "$LOG,%.3f,%s,%d,TOI NOT FOUND", time, ch->sig, ch->prn);
+-        return;
++        // LSIS-AFS interop: upstream's sync_AFS_SF1_FID0 only matches FID=0.
++        // For FID>0 frames (e.g. LSIS-AFS test-vector boundary frames at
++        // FID=3), proceed to LDPC anyway when -dump-fec is requested.  The
++        // LDPC and CRC stages are FID-agnostic, so SB2/SB3/SB4 still decode
++        // correctly; only the receiver's downstream PVT/TOW state will be
++        // wrong (which the LSIS-AFS test-vectors verifier does not consume).
++        // Upstream behaviour is restored exactly when -dump-fec is not set.
++        if (sdr_dump_fec_fp == NULL) {
++            unsync_nav(ch);
++            sdr_log(3, "$LOG,%.3f,%s,%d,TOI NOT FOUND", time, ch->sig, ch->prn);
++            return;
++        }
++        sdr_log(3, "$LOG,%.3f,%s,%d,SB1 FID mismatch — proceeding for FEC dump", time, ch->sig, ch->prn);
++        toi = 0;
+     }
+ 
+     // decode block-interleave
+@@ -2153,6 +2186,13 @@ static void decode_AFSD_frame(sdr_ch_t *ch, uint8_t *syms, int rev)
+         //ch->nav->nerr = nerr; // erasures are allways corrected. # of actual bit errors is unknown.
+         ch->nav->nerr = 0; // FIXME!!
+ 
++        // LSIS-AFS interop: dump SB2 post-LDPC/post-CRC data bits (1176
++        // bytes, no CRC).  These are byte-equivalent to the first 1176
++        // bytes of inputs/frame_*_input.bin.
++        if (sdr_dump_fec_fp != NULL) {
++            fwrite(syms_dec, 1, 1176, sdr_dump_fec_fp);
++            fflush(sdr_dump_fec_fp);
++        }
+         sdr_pack_bits(syms_dec, 1200, 0, data); // decoded SB2 bits
+         ch->week = getbitu(data,0,13);
+         itow = getbitu(data,13,9);
+@@ -2196,6 +2236,11 @@ static void decode_AFSD_frame(sdr_ch_t *ch, uint8_t *syms, int rev)
+     crcok = test_CRC(syms_dec, 870);
+ 
+     if (nerr >= 0 && crcok) {
++        // LSIS-AFS interop: dump SB3 post-LDPC/post-CRC data bits (846 bytes).
++        if (sdr_dump_fec_fp != NULL) {
++            fwrite(syms_dec, 1, 846, sdr_dump_fec_fp);
++            fflush(sdr_dump_fec_fp);
++        }
+         sdr_log(3, "$SB3,%.3f,%s,%d,FRAME DECODED", time, ch->sig, ch->prn);
+     }
+     else {
+@@ -2225,6 +2270,11 @@ static void decode_AFSD_frame(sdr_ch_t *ch, uint8_t *syms, int rev)
+     crcok = test_CRC(syms_dec, 870);
+ 
+     if (nerr >= 0 && crcok) {
++        // LSIS-AFS interop: dump SB4 post-LDPC/post-CRC data bits (846 bytes).
++        if (sdr_dump_fec_fp != NULL) {
++            fwrite(syms_dec, 1, 846, sdr_dump_fec_fp);
++            fflush(sdr_dump_fec_fp);
++        }
+         sdr_log(3, "$SB4,%.3f,%s,%d,FRAME DECODED", time, ch->sig, ch->prn);
+     }
+     else {
