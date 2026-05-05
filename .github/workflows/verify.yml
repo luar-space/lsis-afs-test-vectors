@@ -46,5 +46,8 @@ jobs:
       - name: check-signals (L3 structural + first-chip polarity oracle)
         run: uv run lsis-afs-validate check-signals
 
+      - name: check-decode (L4 cross-decode round-trip)
+        run: uv run lsis-afs-validate check-decode
+
       - name: verify-manifest
         run: uv run lsis-afs-validate verify-manifest

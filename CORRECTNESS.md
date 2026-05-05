@@ -656,22 +656,23 @@ and Annex 3 covers all 210 PRNs.  When the operational AFS-Q assignment
 is published for PRN 13–210, this drop will gain the matching L3 signal
 in a patch release.
 
-## Honest framing — one oracle, not two
+## Honest framing — one structural oracle at L3, receive-side closure at L4
 
-v0.3.0 ships **one formal oracle** for Level 3: a structural + first-chip
-polarity check (`validate.py check-signals`).  This is materially weaker
-than L1 (Annex 3 + LANS-AFS-SIM) and L2 (structural + LANS-AFS-SIM), which
-each ship two independent oracles.  Receive-side closure — decode our
-L3 signal back to the original L2 frame using an independent receiver —
-lands in v0.4.0 with PocketSDR-AFS bundling.  This section explains why.
+v0.3.0 shipped one formal oracle for Level 3 (`validate.py
+check-signals` — structural + first-chip polarity).  v0.4.0's L4 chapter
+adds the second: PocketSDR-AFS decodes every shipped L3 signal back to
+the corresponding L2 frame's 6000-symbol payload byte-for-byte.  The
+L3 transmit-side artefact gets a structural oracle plus a downstream
+receiver-decoded oracle — together those exercise every L3 Pass
+Criterion the interop doc names.
 
 | Level | Oracle 1 (normative) | Oracle 2 (independent) |
 |:---|:---|:---|
 | **1** Codes | LNIS AD1 Volume A Annex 3 | LANS-AFS-SIM chip dumps |
 | **2** Frames | LSIS V1.0 §2.4 + Gateway 3 checklist | LANS-AFS-SIM frame dumps |
-| **3** Signals | Interop doc *Signal Export Format* + LSIS V1.0 §4 + first-chip polarity | **— deferred to v0.4.0 (PocketSDR-AFS receive-side closure)** |
-| 4 Decoded | (planned: PocketSDR-AFS) | — |
-| 5 Parsed  | (planned: PocketSDR-AFS) | — |
+| **3** Signals | Interop doc *Signal Export Format* + LSIS V1.0 §4 + first-chip polarity | **L4 PocketSDR-AFS cross-decode — receive-side closure** (see Level 4 chapter) |
+| **4** Decoded | PocketSDR-AFS @ pinned SHA + bundled patches (v0.4.0) | — |
+| 5 Parsed  | (planned) | — |
 
 ## Oracle 1 — Structural + first-chip polarity
 
@@ -873,7 +874,282 @@ git sparse-checkout set codes frames inputs references validate.py manifest.json
 The generator that produced these vectors is part of the LuarSpace
 reference implementation and is not yet public; the public Apache-2.0
 release is scheduled for Phase 2 of the competition timeline (same
-status as the L1/L2 generators).  Until then, the receive-side closure
-in v0.4.0 (PocketSDR-AFS decoding our signals back to the shipped L2
-frame bytes) will be the externally-verifiable evidence that the L3
-content is correct end-to-end.
+status as the L1/L2 generators).  In the meantime, the **receive-side
+closure** at L4 (PocketSDR-AFS decoding our signals back to the shipped
+L2 frame bytes — see next chapter) is externally-verifiable evidence
+that the L3 content is correct end-to-end.
+
+# Level 4 — Decoding
+
+Level 4 closes the receive-side loop the L3 Pass Criteria call for:
+*Cross-decoding recovers original data with BER < 10⁻⁵* (interop doc
+"Pass Criteria — Level 3"), elevated to byte-exactness by the interop
+doc's "Pass Criteria — Level 4":
+
+> Frame synchronization successful (>99% detection); All subframes
+> decoded correctly; CRC validation passes; **Decoded data matches
+> original input exactly**.
+
+The bundled L4 oracle is **PocketSDR-AFS** — Takasu/Ebinuma's BSD-2-Clause
+AFS-specific software-defined receiver
+([`osqzss/PocketSDR-AFS`](https://github.com/osqzss/PocketSDR-AFS)) at
+pinned upstream SHA `5b23809f30d68518b7fad7a564fd0fac57cc497d`.  The
+verifier `references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py`
+clones upstream, applies two small bundled patches, builds, runs the
+patched `pocket_trk` against every shipped L3 signal, and runs **two**
+bytewise oracles at different points in the decode chain:
+
+- **Channel-symbol oracle** — dumps the 6000 hard-decision symbols at
+  the entry of `decode_AFSD_frame()` (post-sync, pre-deinterleave) and
+  bytewise compares them to `frames/frame_*.bin[64:6064]`.  Exercises
+  the demodulator: acquisition + tracking + sync detection + symbol
+  detection.  Applies to all 10 signals.
+- **Post-FEC oracle** — dumps the SB2 + SB3 + SB4 LDPC-decoded data
+  bits (1176 + 846 + 846 = 2868 bytes) immediately after each
+  subframe's `sdr_decode_LDPC_AFS_SF{2,3}` + `test_CRC` succeeds, and
+  bytewise compares them to `inputs/frame_*_input.bin` (the canonical
+  pre-encode bytes shipped at v0.2.1).  Exercises the deinterleave +
+  LDPC + CRC pipeline.  Applies to all 10 signals — including the 2
+  FID=3 boundary frames, thanks to the bundled SB1 FID-bypass in
+  `decode_AFSD_frame`: upstream's `sync_AFS_SF1_FID0` only matches
+  FID=0, but LDPC + CRC are FID-agnostic block codes, so SB2/SB3/SB4
+  decode correctly given the (FID-independent) sync polarity already
+  determined by `sync_frame()`.  The bypass is gated behind
+  `-dump-fec`; upstream behaviour is unchanged when the flag isn't set.
+
+The post-FEC oracle is the strict reading of the interop doc's L4 pass
+criterion ("Decoded data matches original input exactly") — the
+receiver's post-FEC output equals the encoder's pre-FEC input.
+
+| Decoded output | Source frame | PRN | Expected coverage |
+|:---|:---|:---:|:---|
+| `decoded_signal_message_1_12s.bin` | `frame_message_1.bin` | 1 | TC1 baseline (all-zeros) |
+| `decoded_signal_message_2_12s.bin` | `frame_message_2.bin` | 1 | content variation (all-ones) |
+| `decoded_signal_message_3_12s.bin` | `frame_message_3.bin` | 1 | content variation (alternating bits) |
+| `decoded_signal_message_4_12s.bin` | `frame_message_4.bin` | 1 | content variation (marker surrogate) |
+| `decoded_signal_message_5_12s.bin` | `frame_message_5.bin` | 1 | content variation (xorshift32) |
+| `decoded_signal_prn2_baseline_12s.bin` | `frame_message_1.bin` | 2 | TC2 — secondary S1 |
+| `decoded_signal_prn3_baseline_12s.bin` | `frame_message_1.bin` | 3 | TC2 — secondary S2 |
+| `decoded_signal_prn12_baseline_12s.bin` | `frame_message_1.bin` | 12 | TC2 — secondary S3 + high PRN |
+| `decoded_signal_boundary_at_prn12_12s.bin` | `frame_boundary.bin` | 12 | TC4 — FID=3, TOI=99 maxima |
+| `decoded_signal_boundary_max_fields_at_prn12_12s.bin` | `frame_boundary_max_fields.bin` | 12 | TC4 — WN=8191, ITOW=503 maxima |
+
+Each `decoded_signal_*.bin` is exactly **6000 bytes** (one uint8 per
+AFS-D hard-decision symbol, value 0 or 1, no header).  Each
+`decoded_fec_signal_*.bin` is exactly **2868 bytes** (one uint8 per
+post-LDPC SB2/SB3/SB4 data bit, no CRC trailer).  Total `decoded/`
+footprint: ~85 KB.
+
+## Oracle 1+2 — PocketSDR-AFS @ pinned SHA + bundled patches
+
+The verifier mirrors the L1+L2 `verify_oracle.py` shape: a single
+command from a clean checkout reproduces the entire decode chain.
+
+```bash
+brew install fftw libusb     # macOS Homebrew dependencies (Linux: apt equivalents)
+python references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py
+#   pinned SHA: 5b23809f30d68518b7fad7a564fd0fac57cc497d
+#   ▸ dependencies OK
+#   ▸ cloning ... + applying dump-symbols.patch + clang17-build-fix.patch
+#   ▸ building lib/ + app/pocket_trk
+#   Decoding…
+#     ▸ decoding signal_message_1_12s.iq.gz (PRN 1, source frame_message_1.bin)
+#     … (10 entries) …
+#   Results:
+#     [OK  ] signal_message_1_12s.iq.gz  PRN= 1  chan OK  FEC OK  CRC: SB2 1/1, SB3 1/1, SB4 1/1
+#     … (10 entries, all OK on both oracles) …
+#     Channel-symbol oracle: 10/10 signals byte-exactly recovered
+#     Post-FEC oracle:       10/10 signals byte-exactly recovered
+```
+
+The cheap CI-friendly form runs both oracles against the shipped
+`decoded/` outputs:
+
+```bash
+python validate.py check-decode
+#   Channel-symbol oracle: 10/10
+#   Post-FEC oracle:       10/10
+#
+# OK — all 10 channel-symbol outputs match frames/*.bin payloads
+#      and all 10 post-FEC outputs match inputs/*_input.bin.
+```
+
+### Bundled patches against pinned upstream SHA
+
+Two patches live in `references/pocketsdr-afs/harnesses/patches/`,
+applied in order by the verifier at build time:
+
+**`dump-symbols.patch`** — ~85 LoC, narrow surface for maintenance
+across upstream bumps.  Adds two opt-in CLI flags to `pocket_trk` plus
+one small SB1 bypass:
+
+- `-dump-symbols <path>` — emits the raw 6000 hard-decision AFS-D
+  frame symbols (sync prefix + SB1 + interleaved SB2/SB3/SB4) at the
+  entry of `src/sdr_nav.c::decode_AFSD_frame()`, *before* deinterleaving
+  and LDPC decoding.  Polarity-normalised via XOR with the receiver's
+  chosen lock polarity (`rev`) so the dumped stream always matches the
+  canonical transmit-side ordering regardless of carrier-phase
+  ambiguity.
+- `-dump-fec <path>` — emits the post-LDPC, post-CRC SB2 + SB3 + SB4
+  data bits (1176 + 846 + 846 = 2868 bytes per successful frame, no
+  CRC trailers, no header) immediately after each subframe's
+  `sdr_decode_LDPC_AFS_SF{2,3}` + `test_CRC` succeeds.  Output layout
+  matches `inputs/frame_*_input.bin`.
+- **SB1 FID-bypass** — when `-dump-fec` is active and upstream's
+  `sync_AFS_SF1_FID0` fails to match (i.e. the frame carries FID > 0,
+  e.g. our boundary frames at FID=3), continue past the SB1 search
+  with a placeholder TOI rather than bailing.  LDPC + CRC are
+  FID-agnostic, so SB2/SB3/SB4 still decode and produce the post-FEC
+  dump.  Receiver PVT/TOW state ends up wrong (TOI is consumed
+  downstream by `update_tow()`), which our test-vector verifier doesn't
+  read.  Upstream behaviour is restored exactly when `-dump-fec` is
+  not set.
+
+**`clang17-build-fix.patch`** — renames a file-static `satpos()` in
+`src/sdr_pvt_afs.c` whose name clashes with RTKLIB's exported
+`int satpos(...)` under Apple Clang 17+ strict-declaration checking.
+No semantic change; required for clean builds on contemporary macOS
+Command Line Tools.  Independent of the L4 cross-decode functionality.
+
+Both patches are **local-only** (not submitted upstream) and live in
+the LSIS-AFS Test Vectors repository; the verifier applies them to
+the cloned upstream tree at build time.  This mirrors the LANS-AFS-SIM
+precedent at L1+L2 (`verify_oracle.py` recompiles upstream sources
+with `-Dmain=afs_sim_main`).
+
+## Disclosed normalisations
+
+### Tile 3× before feeding to pocket_trk
+
+PocketSDR-AFS's `decode_AFSD` (`src/sdr_nav.c:2256`) requires
+`ch->lock >= 6068 + 500 = 6568` symbols of locked tracking before
+attempting frame sync, and `sync_frame()` (`src/sdr_nav.c:203`)
+further requires the 68-bit AFSD preamble at **two** buffer offsets
+6000 symbols apart — i.e., two consecutive frames' sync prefixes.
+The first successful `decode_AFSD_frame()` call therefore lands at
+`ch->lock = 12068` ≈ 24.14 s of locked tracking at the AFS-D
+500 sym/s rate.
+
+Our shipped signals are 12 s = 6000 symbols = exactly **one** frame.
+The harness tiles the converted INT8X2 stream three times before
+feeding it to `pocket_trk`; all tiles are byte-identical, so the
+dumped 6000 symbols match the source frame regardless of which
+tile triggers sync.  Set in
+`references/pocketsdr-afs/harnesses/decode_signal.py::DEFAULT_TILE_COUNT`.
+
+### float32 → int8 cast at scale ×100
+
+PocketSDR-AFS only consumes int8 input (`-fmt INT8X2`).  Our BPSK
+±1.0 float32 stream is cast to ±100 int8 (well below the ±127
+saturation limit), then PocketSDR-AFS's internal
+`SDR_CSCALE = 1/24` rescales back to ~±4.17 floats internally for
+correlation.  The cast is lossless given the strict ±1.0 sample
+range enforced by `check-signals`.
+
+### AWGN injection (off by default)
+
+The harness exposes `--awgn-cn0 <DBHZ>` for users who want to
+verify decoder robustness under disclosed noise.  Default is **off**
+(infinite C/N0 — the shipped clean-baseband signals).  When enabled,
+seeded `numpy.random.default_rng` AWGN is added to the float32
+stream before the int8 cast at the requested target C/N0.  Pinned
+seed is per-signal-derived from the input filename so re-runs are
+byte-stable.  All 10 signals decode byte-exactly with `--awgn-cn0`
+**off** in our verification — AWGN injection is provisioned for
+robustness studies, not required for the v0.4.0 pass criterion.
+
+## What this catches
+
+- **Receive-path correctness end-to-end**: acquisition, code-phase
+  search, Doppler search, FLL → PLL → DLL pull-in and lock,
+  hard-decision symbol demodulation per AFS-D primary-code epoch,
+  68-bit sync-pattern detection (channel-symbol oracle, all 10 signals).
+- **FEC stack correctness end-to-end**: deinterleave (60×98), LDPC
+  decode (SB2 / SB3 / SB4), CRC-24Q validation (post-FEC oracle, all
+  10 signals including the 2 FID=3 boundary frames thanks to the
+  bundled SB1 FID-bypass).  The receiver's post-FEC bytes equal the
+  encoder's pre-FEC inputs exactly — every BCH/CRC/LDPC bit-flip
+  bug surfaces here.
+- **PRN cross-coverage**: 10 signals across PRN 1, 2, 3, 12 — all
+  4 AFS-Q secondary indices (S0–S3) per LSIS V1.0 §4.4.2.
+- **Boundary content**: TC4 frames at PRN 12 with FID=3, TOI=99,
+  WN=8191, ITOW=503 — both oracles round-trip the recovered bytes
+  back to the corresponding shipped vectors (`frames/` for the
+  channel layer, `inputs/` for the post-FEC layer).
+
+## What this does NOT catch (deferred to L5)
+
+- **Per-field semantic parsing**: extracting WN, ITOW, CED parameters,
+  ephemeris, Time of Transmission, health flags, SF3/SF4 message-type
+  fields from the recovered SB2/SB3/SB4 byte arrays.  Those are L5
+  *Message Parsing Interoperability* concerns.  L4 confirms the
+  *bytes* round-trip (both at the channel layer and at the post-FEC
+  layer); L5 will confirm their *interpretation* round-trips
+  identically across implementations as standardised JSON.
+- **(FID, TOI) extraction from SB1**: the bundled FID-bypass treats
+  `toi=0` as a placeholder when SB1 BCH doesn't match FID=0, so
+  PocketSDR-AFS doesn't recover (FID, TOI) for FID>0 frames.  L5 will
+  derive (FID, TOI) for boundary frames via a small Python BCH(51,8)
+  decoder operating on `frames/[64:64+52]` directly (matching the
+  project's "structural oracle from spec bit-positions" pattern at
+  L1+L2) — no further upstream patch needed.
+- **High-noise robustness curves (BER vs C/N0)**: the harness
+  supports `--awgn-cn0` but v0.4.0 ships only the byte-exact
+  noiseless-baseband result.
+- **High-noise robustness curves (BER vs C/N0)**: the harness
+  supports `--awgn-cn0` but v0.4.0 ships only the byte-exact
+  noiseless-baseband result.
+
+## Bundled artefact layout
+
+```
+references/pocketsdr-afs/
+├── LICENSE.txt                              # upstream BSD-2-Clause, redistributed verbatim
+├── README.md                                # oracle description + scope
+├── decoded/                                 # 18 files:
+│                                            #   10 × decoded_signal_*.bin (6000 bytes, channel)
+│                                            #    8 × decoded_fec_signal_*.bin (2868 bytes, FEC, FID=0 only)
+└── harnesses/
+    ├── verify_pocketsdr_decode.py           # one-command end-to-end verifier
+    ├── decode_signal.py                     # per-signal driver (called by verifier)
+    ├── lsisiq_to_pocketsdr.py               # LSISIQ float32 → INT8X2 int8 converter
+    ├── parse_pocketsdr_log.py               # $SBn CRC-pass log extractor
+    ├── README.md                            # build + run instructions
+    └── patches/
+        ├── dump-symbols.patch               # adds -dump-symbols + -dump-fec flags + SB1 FID-bypass
+        └── clang17-build-fix.patch          # renames colliding satpos() static
+```
+
+Total v0.4.0 footprint: < 1 MB.  ~88 KB of decoded outputs (60 KB
+channel + 28 KB FEC) + harness sources + the upstream LICENSE.
+
+## Trust chain (end-to-end)
+
+The L4 oracles anchor the full LSIS-AFS pipeline:
+
+1. **L1** spreading codes are bit-exact against LNIS AD1 Annex 3
+   (normative) and LANS-AFS-SIM (independent).
+2. **L2** frames are bit-exact against LSIS V1.0 §2.4 structural
+   rules and LANS-AFS-SIM (independent encoder pipeline).
+3. **L2 inputs** (canonical pre-encode SB2/SB3/SB4 bytes shipped at
+   v0.2.1) are deterministic from documented patterns + FAQ Q21
+   normalisation.
+4. **L3** signals are deterministic functions of L2 frames and L1
+   codes via LSIS V1.0 §4 BPSK + I/Q-multiplex math; first-chip +
+   symbol-120 polarity oracle catches the failure modes most
+   common in practice.
+5. **L4 channel-symbol** oracle: PocketSDR-AFS receives every L3
+   signal, demodulates, and recovers the exact L2 frame symbols
+   byte-for-byte (10/10).
+6. **L4 post-FEC** oracle: PocketSDR-AFS deinterleaves, LDPC-decodes,
+   and CRC-validates each subframe's bits, recovering the exact
+   canonical pre-encode SB2/SB3/SB4 bytes byte-for-byte (10/10,
+   including the 2 FID=3 boundary frames via the bundled SB1
+   FID-bypass).
+
+Any error in steps 1–4 would surface as a byte mismatch at step 5 or 6
+— both comparators are strict `cmp`, not structural checks or
+BER bounds.  All checks pass at v0.4.0; the receive-side chain is
+closed at the bit level.  Semantic field interpretation (parsing the
+SB2 byte array into typed nav-data fields like `{wn, itow, ced}`)
+arrives at L5.

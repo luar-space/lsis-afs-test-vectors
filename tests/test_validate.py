@@ -9,6 +9,7 @@ subcommand from the command line, plus positive+negative pairs for
 
 from __future__ import annotations
 
+import contextlib
 import gzip
 import json
 import shutil
@@ -374,12 +375,13 @@ def test_refresh_without_url_is_helpful() -> None:
 def test_manifest_structure() -> None:
     manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
     assert manifest["version"] == "1.0"
-    assert manifest["levels"] == [1, 2, 3]  # grows as future drops land
+    assert manifest["levels"] == [1, 2, 3, 4]  # grows as future drops land
     assert "oracles" in manifest
-    # L1 normative + L1/L2 LANS + L2 structural + L3 structural
-    assert len(manifest["oracles"]) >= 4
-    # 630 L1 codes + 7 frames + 7 LANS frames + 7 canonical inputs + 10 L3 signals + readmes
-    assert len(manifest["files"]) >= 661
+    # L1 normative + L1/L2 LANS + L2 structural + L3 structural + L4 PocketSDR-AFS
+    assert len(manifest["oracles"]) >= 5
+    # 630 L1 codes + 7 frames + 7 LANS frames + 7 canonical inputs + 10 L3 signals
+    # + 10 L4 channel-symbol + 8 L4 post-FEC outputs + harness sources + readmes
+    assert len(manifest["files"]) >= 700
 
 
 def test_manifest_covers_every_code_file() -> None:
@@ -466,10 +468,12 @@ def test_no_args_shows_help_and_errors() -> None:
         "check-lans-afs-sim-frames",
         "check-canonical-inputs",
         "check-signals",
+        "check-decode",
         "diff",
         "diff-frames",
         "diff-inputs",
         "diff-signals",
+        "diff-decode",
         "build-canonical-inputs",
         "verify-manifest",
         "rebuild-manifest",
@@ -494,11 +498,54 @@ def test_rebuild_manifest_is_idempotent(tmp_path: Path) -> None:
     assert verify.returncode == 0, verify.stderr
     # Structural checks on the regenerated file
     after = json.loads((REPO_ROOT / "manifest.json").read_text())
-    assert after["levels"] == [1, 2, 3]
-    assert len(after["files"]) >= 655
+    assert after["levels"] == [1, 2, 3, 4]
+    assert len(after["files"]) >= 700
     # Restore the original manifest so the test has no side-effect on other tests
     (REPO_ROOT / "manifest.json").write_text(before)
     _ = tmp_path  # unused — reserved for future symlink isolation if needed
+
+
+def test_rebuild_manifest_excludes_generated_artefacts(tmp_path: Path) -> None:
+    """A maintainer importing the harness modules creates __pycache__/*.pyc
+    files under references/pocketsdr-afs/harnesses/.  Those are git-ignored,
+    so they don't exist in a clean checkout — but rebuild-manifest must not
+    pull them into manifest.json either, otherwise verify-manifest fails on
+    every clean checkout (https://github.com/luar-space/lsis-afs-test-vectors
+    issue: drop-by-drop manifest churn from local imports)."""
+    cache_dir = REPO_ROOT / "references/pocketsdr-afs/harnesses/__pycache__"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    fake_pyc = cache_dir / "regression_test.cpython-312.pyc"
+    fake_pyc.write_bytes(b"\x00\x00\x00\x00fake bytecode")
+
+    before = (REPO_ROOT / "manifest.json").read_text()
+    try:
+        result = run("rebuild-manifest")
+        assert result.returncode == 0, result.stderr
+        manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+        files = manifest["files"]
+
+        # Hard assertion: no entry under the manifest may be a .pyc or live
+        # under any __pycache__ directory.
+        leaks = [k for k in files if "__pycache__" in k or k.endswith(".pyc")]
+        assert leaks == [], f"manifest leaked generated artefacts: {leaks}"
+
+        # And specifically: the file we just dropped is NOT in the manifest.
+        leak_rel = fake_pyc.relative_to(REPO_ROOT).as_posix()
+        assert leak_rel not in files, (
+            f"{leak_rel} leaked into manifest despite __pycache__ exclusion"
+        )
+
+        # Sanity: the unrelated harness sources ARE still there.
+        assert "references/pocketsdr-afs/harnesses/decode_signal.py" in files, (
+            "regular harness sources should still be hashed"
+        )
+    finally:
+        fake_pyc.unlink(missing_ok=True)
+        # Drop the dir if we created it from scratch (don't trample a pre-existing one).
+        with contextlib.suppress(OSError):
+            cache_dir.rmdir()
+        (REPO_ROOT / "manifest.json").write_text(before)
+    _ = tmp_path  # unused — kept so the fixture-injection signature is stable
 
 
 # ─────────────────────────────── L3 signals ────────────────────────────────
@@ -723,3 +770,179 @@ def test_manifest_covers_every_signal_file() -> None:
     for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
         rel = f"signals/{name}"
         assert rel in files, f"{rel} missing from manifest"
+
+
+# ─────────────────────────────── L4 decoded outputs ────────────────────────
+
+
+def test_check_decode_passes() -> None:
+    """check-decode must report 10/10 on both channel-symbol and post-FEC oracles."""
+    result = run("check-decode")
+    assert result.returncode == 0, result.stderr
+    assert "Channel-symbol oracle: 10/10" in result.stdout
+    assert "Post-FEC oracle:       10/10" in result.stdout
+    assert "all 10 channel-symbol outputs match" in result.stdout
+    assert "all 10 post-FEC outputs match" in result.stdout
+
+
+def test_diff_decode_self_is_clean(tmp_path: Path) -> None:
+    """The bundled reference is byte-equal to frames/+inputs/ (check-decode
+    guarantees it), so diff-decode of a copy must pass the Level 4 criterion."""
+    other = tmp_path / "decoded-copy"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_"):
+            (other / path.name).write_bytes(path.read_bytes())
+    result = run("diff-decode", str(other))
+    assert result.returncode == 0, result.stderr
+    assert "Channel-symbol vs frames/:  10/10" in result.stdout
+    assert "Post-FEC vs inputs/:        10/10" in result.stdout
+    assert "OK — decoded data matches original input exactly" in result.stdout
+
+
+def test_diff_decode_vs_pocketsdr_secondary(tmp_path: Path) -> None:
+    """--vs-pocketsdr adds the secondary diff against the bundled reference."""
+    other = tmp_path / "decoded-copy"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_"):
+            (other / path.name).write_bytes(path.read_bytes())
+    result = run("diff-decode", str(other), "--vs-pocketsdr")
+    assert result.returncode == 0, result.stderr
+    assert "Level 4 pass criterion" in result.stdout
+    assert "vs PocketSDR reference decode (secondary)" in result.stdout
+    assert "OK — decoded data matches original input exactly" in result.stdout
+
+
+def test_diff_decode_reports_missing_file(tmp_path: Path) -> None:
+    """An empty directory must fail with per-file 'missing' diagnostics."""
+    other = tmp_path / "empty"
+    other.mkdir()
+    result = run("diff-decode", str(other))
+    assert result.returncode == 1
+    combined = result.stdout + result.stderr
+    assert "missing in" in combined
+
+
+def test_diff_decode_detects_channel_mutation(tmp_path: Path) -> None:
+    """A flip in a decoded_signal_*.bin must be reported."""
+    other = tmp_path / "decoded-mutated"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_"):
+            raw = bytearray(path.read_bytes())
+            if path.name == "decoded_signal_message_1_12s.bin":
+                raw[0] ^= 1  # flip first symbol
+            (other / path.name).write_bytes(bytes(raw))
+
+    result = run("diff-decode", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "decoded_signal_message_1_12s" in combined
+
+
+def test_diff_decode_detects_fec_mutation(tmp_path: Path) -> None:
+    """A flip in a decoded_fec_signal_*.bin must be reported."""
+    other = tmp_path / "decoded-fec-mutated"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_"):
+            raw = bytearray(path.read_bytes())
+            if path.name == "decoded_fec_signal_message_3_12s.bin":
+                raw[500] ^= 1  # flip a deep SB2 bit
+            (other / path.name).write_bytes(bytes(raw))
+
+    result = run("diff-decode", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "decoded_fec_signal_message_3_12s" in combined
+
+
+def test_check_decode_catches_size_mutation(tmp_path: Path) -> None:
+    """check-decode must reject decoded files that are not the expected size."""
+    target = REPO_ROOT / "references/pocketsdr-afs/decoded/decoded_signal_message_1_12s.bin"
+    original = target.read_bytes()
+    try:
+        target.write_bytes(original[:5999])  # one byte short
+        result = run("check-decode")
+        assert result.returncode != 0
+        assert "5999 bytes" in (result.stdout + result.stderr)
+    finally:
+        target.write_bytes(original)
+
+
+def test_check_decode_catches_symbol_mutation(tmp_path: Path) -> None:
+    """check-decode must reject a single-bit flip in any decoded_signal_*.bin file."""
+    target = REPO_ROOT / "references/pocketsdr-afs/decoded/decoded_signal_message_3_12s.bin"
+    original = target.read_bytes()
+    try:
+        raw = bytearray(original)
+        raw[5000] ^= 1  # deep in payload, can't be confused with sync/SB1
+        target.write_bytes(bytes(raw))
+        result = run("check-decode")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "decoded_signal_message_3_12s" in combined
+        assert "first symbol mismatch at index 5000" in combined
+    finally:
+        target.write_bytes(original)
+
+
+def test_check_decode_catches_fec_mutation(tmp_path: Path) -> None:
+    """check-decode must reject a single-bit flip in any decoded_fec_signal_*.bin file."""
+    target = REPO_ROOT / "references/pocketsdr-afs/decoded/decoded_fec_signal_message_3_12s.bin"
+    original = target.read_bytes()
+    try:
+        raw = bytearray(original)
+        raw[500] ^= 1  # deep in SB2 data
+        target.write_bytes(bytes(raw))
+        result = run("check-decode")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "decoded_fec_signal_message_3_12s" in combined
+        assert "first FEC byte mismatch at index 500" in combined
+    finally:
+        target.write_bytes(original)
+
+
+def test_manifest_covers_every_decoded_file() -> None:
+    """Every decoded_signal_*.bin AND every decoded_fec_signal_*.bin (all 10
+    of each, including the FID=3 boundary frames) must be SHA-pinned."""
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    for name, _prn, _source_frame in validate.SIGNAL_TEST_VECTORS:
+        chan_rel = f"references/pocketsdr-afs/decoded/{validate._decoded_filename_for(name)}"
+        fec_rel = f"references/pocketsdr-afs/decoded/{validate._decoded_fec_filename_for(name)}"
+        assert chan_rel in files, f"{chan_rel} missing from manifest"
+        assert fec_rel in files, f"{fec_rel} missing from manifest"
+
+
+def test_decoded_files_are_strictly_zero_or_one() -> None:
+    """End-to-end smoke: every byte in decoded/ is 0 or 1 (symbol-domain)."""
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if not path.is_file() or not path.name.startswith("decoded_"):
+            continue
+        data = path.read_bytes()
+        expected = (
+            validate.DECODED_FEC_FILE_LEN
+            if path.name.startswith("decoded_fec_")
+            else validate.DECODED_FILE_LEN
+        )
+        assert len(data) == expected, f"{path.name}: {len(data)} bytes (expected {expected})"
+        assert all(b in (0, 1) for b in data), f"{path.name}: non-{{0,1}} byte"
+
+
+def test_fec_outputs_match_inputs_byte_for_byte() -> None:
+    """Smoke test: every decoded_fec_signal_*.bin (all 10 incl. FID=3 boundary
+    frames, thanks to the bundled FID-bypass patch) matches the matching
+    inputs/*_input.bin."""
+    for name, _prn, source_frame in validate.SIGNAL_TEST_VECTORS:
+        fec_path = (
+            REPO_ROOT
+            / "references/pocketsdr-afs/decoded"
+            / validate._decoded_fec_filename_for(name)
+        )
+        input_path = REPO_ROOT / "inputs" / validate._input_filename_for(source_frame)
+        assert fec_path.read_bytes() == input_path.read_bytes(), (
+            f"{fec_path.name} != {input_path.name}"
+        )

@@ -1,4 +1,4 @@
-"""LSIS-AFS interoperability test-vector validator (Levels 1–3).
+"""LSIS-AFS interoperability test-vector validator (Levels 1–4).
 
 Subcommands
 -----------
@@ -39,6 +39,18 @@ diff-frames
 
 diff-signals
     Compare a directory of L3 signal vectors (signal_*_12s.iq[.gz]) against ours.
+
+check-decode
+    Verify every shipped ``references/pocketsdr-afs/decoded/decoded_signal_*.bin``
+    is exactly 6000 bytes of {0,1} symbols and byte-equal to the corresponding
+    ``frames/frame_*.bin[64:6064]``.  L4 cheap oracle: confirms the bundled
+    PocketSDR-AFS cross-decode outputs round-trip to the shipped L2 frames.
+    Re-running the decode end-to-end (clone + build + decode 10 signals)
+    requires the maintainer command
+    ``references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py``.
+
+diff-decode
+    Compare a directory of decoded outputs (decoded_signal_*.bin) against ours.
 
 check-canonical-inputs
     Verify the canonical pre-encode input files in ``inputs/`` reproduce
@@ -96,6 +108,8 @@ ANNEX3_DIR = REFERENCES_DIR / "annex-3"
 LANS_DIR = REFERENCES_DIR / "lans-afs-sim"
 LANS_CODES_DIR = LANS_DIR / "codes"
 LANS_FRAMES_DIR = LANS_DIR / "frames"
+POCKETSDR_DIR = REFERENCES_DIR / "pocketsdr-afs"
+POCKETSDR_DECODED_DIR = POCKETSDR_DIR / "decoded"
 MANIFEST_PATH = REPO_ROOT / "manifest.json"
 
 ANNEX3_FILES = {
@@ -917,6 +931,51 @@ def _read_signal_bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+# ─────────────────────────────── Level 4 constants ─────────────────────────
+#
+# Per references/interoperability.pdf "Level 4: Decoding Interoperability",
+# the pass criterion is "Decoded data matches original input exactly".  Our
+# bundled cross-decode oracle is PocketSDR-AFS @ pinned SHA, with a small
+# bundled patch that emits the raw 6000 hard-decision symbols per detected
+# AFS-D frame (sync prefix + SB1 + interleaved SB2/SB3/SB4) before
+# deinterleaving.  Those 6000 symbols are the exact byte sequence shipped
+# at frames/frame_*.bin[64:6064] (after the 64-byte LSISAFS header).
+#
+# This module's check-decode subcommand verifies the shipped decoded
+# outputs round-trip; the upstream rebuild + cross-decode is in
+# references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py.
+
+DECODED_FILE_LEN = FRAME_PAYLOAD_LEN  # 6000 — one byte per symbol
+
+# Post-FEC oracle: each frame's SB2 + SB3 + SB4 LDPC-decoded data bits
+# (no CRC trailer) concatenated.  Same layout as inputs/*_input.bin.
+DECODED_FEC_FILE_LEN = INPUT_BYTE_COUNT  # 2868 = 1176 + 846 + 846
+
+
+def _decoded_filename_for(signal_filename: str) -> str:
+    """signal_*_12s.iq.gz → decoded_signal_*_12s.bin (channel-symbol oracle)"""
+    stem = signal_filename.removesuffix(".gz").removesuffix(".iq")
+    return f"decoded_{stem}.bin"
+
+
+def _decoded_fec_filename_for(signal_filename: str) -> str:
+    """signal_*_12s.iq.gz → decoded_fec_signal_*_12s.bin (post-FEC oracle)"""
+    stem = signal_filename.removesuffix(".gz").removesuffix(".iq")
+    return f"decoded_fec_{stem}.bin"
+
+
+def _input_filename_for(source_frame: str) -> str:
+    """frame_*.bin → frame_*_input.bin (canonical pre-encode bytes)."""
+    return source_frame.removesuffix(".bin") + "_input.bin"
+
+
+# (signal, prn, source_frame) is reused from SIGNAL_TEST_VECTORS — the L4
+# decoded outputs are 1:1 with the L3 signals.  We do not duplicate the
+# table; instead, we derive the (decoded_filename, source_frame) pairs
+# at use sites.  This guarantees the L3 signal coverage and L4 decode
+# coverage stay in lock-step automatically.
+
+
 def _parse_iq_header(data: bytes, source: str) -> tuple[dict[str, object], list[str]]:
     """Parse the 128-byte LSISIQ header. Returns (fields, errors)."""
     errors: list[str] = []
@@ -1275,6 +1334,263 @@ def cmd_diff_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────── check-decode ──────────────────────────────
+
+
+def cmd_check_decode(_args: argparse.Namespace | None = None) -> int:
+    """Round-trip-verify the bundled PocketSDR-AFS decoded outputs.
+
+    Two oracles run end-to-end:
+
+    1. **Channel-symbol oracle** — every signal in SIGNAL_TEST_VECTORS:
+       ``references/pocketsdr-afs/decoded/decoded_signal_*.bin`` is
+       exactly ``DECODED_FILE_LEN`` (6000) bytes of {0, 1} symbols and
+       byte-equal to ``frames/<source_frame>[64:6064]``.  Demonstrates
+       that the receiver's demodulator recovers the on-air channel bits.
+
+    2. **Post-FEC oracle** — every signal in SIGNAL_TEST_VECTORS:
+       ``references/pocketsdr-afs/decoded/decoded_fec_signal_*.bin`` is
+       exactly ``DECODED_FEC_FILE_LEN`` (2868) bytes of {0, 1} bits and
+       byte-equal to ``inputs/<source_frame_stem>_input.bin``.
+       Demonstrates that the receiver's deinterleave + LDPC + CRC
+       pipeline recovers the canonical pre-encode bits.
+
+    Both oracles cover all 10 signals (including the FID=3 boundary
+    frames) under v0.4.0+'s bundled FID-bypass patch — the LDPC + CRC
+    stages are FID-agnostic, so SB2/SB3/SB4 decode correctly even when
+    upstream's FID=0-only SB1 BCH search fails.
+
+    This is the cheap CI-friendly form of the L4 oracle.  The expensive
+    rebuild+cross-decode form is
+    ``references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py``.
+    """
+    del _args
+    if not POCKETSDR_DECODED_DIR.is_dir():
+        print(f"ERROR: {POCKETSDR_DECODED_DIR} not found", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    passed_chan = 0
+    passed_fec = 0
+    for signal_filename, _prn, source_frame in SIGNAL_TEST_VECTORS:
+        # ── channel-symbol oracle ──────────────────────────────────────
+        decoded_name = _decoded_filename_for(signal_filename)
+        decoded_path = POCKETSDR_DECODED_DIR / decoded_name
+        if not decoded_path.exists():
+            failures.append(f"{decoded_name}: missing")
+        else:
+            decoded_bytes = decoded_path.read_bytes()
+            chan_err = _verify_decoded_chan(decoded_name, decoded_bytes, source_frame)
+            if chan_err is None:
+                passed_chan += 1
+            else:
+                failures.append(chan_err)
+
+        # ── post-FEC oracle ────────────────────────────────────────────
+        fec_name = _decoded_fec_filename_for(signal_filename)
+        fec_path = POCKETSDR_DECODED_DIR / fec_name
+        if not fec_path.exists():
+            failures.append(f"{fec_name}: missing")
+            continue
+        fec_bytes = fec_path.read_bytes()
+        fec_err = _verify_decoded_fec(fec_name, fec_bytes, source_frame)
+        if fec_err is None:
+            passed_fec += 1
+        else:
+            failures.append(fec_err)
+
+    total = len(SIGNAL_TEST_VECTORS)
+    print(f"  Channel-symbol oracle: {passed_chan:>2}/{total}")
+    print(f"  Post-FEC oracle:       {passed_fec:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} problems", file=sys.stderr)
+        for msg in failures[:20]:
+            print(f"  {msg}", file=sys.stderr)
+        if len(failures) > 20:
+            print(f"  … ({len(failures) - 20} more)", file=sys.stderr)
+        return 1
+    print(
+        f"\nOK — all {total} channel-symbol outputs match frames/*.bin payloads "
+        f"and all {total} post-FEC outputs match inputs/*_input.bin."
+    )
+    return 0
+
+
+def _verify_decoded_chan(decoded_name: str, decoded_bytes: bytes, source_frame: str) -> str | None:
+    """Validate one decoded_signal_*.bin file. Returns error str or None."""
+    if len(decoded_bytes) != DECODED_FILE_LEN:
+        return f"{decoded_name}: {len(decoded_bytes)} bytes, expected {DECODED_FILE_LEN}"
+    if any(b not in (0, 1) for b in decoded_bytes):
+        bad_idx = next(i for i, b in enumerate(decoded_bytes) if b not in (0, 1))
+        return (
+            f"{decoded_name}: non-{{0,1}} byte at offset {bad_idx} (value {decoded_bytes[bad_idx]})"
+        )
+    frame_bytes = (FRAMES_DIR / source_frame).read_bytes()
+    if len(frame_bytes) != FRAME_FILE_LEN:
+        return (
+            f"{decoded_name}: companion {source_frame} is "
+            f"{len(frame_bytes)} bytes, expected {FRAME_FILE_LEN}"
+        )
+    expected = frame_bytes[FRAME_HEADER_LEN : FRAME_HEADER_LEN + FRAME_PAYLOAD_LEN]
+    if decoded_bytes == expected:
+        return None
+    first = next(i for i, (a, b) in enumerate(zip(decoded_bytes, expected, strict=True)) if a != b)
+    return (
+        f"{decoded_name}: first symbol mismatch at index {first} "
+        f"(expected {expected[first]}, got {decoded_bytes[first]})"
+    )
+
+
+def _verify_decoded_fec(fec_name: str, fec_bytes: bytes, source_frame: str) -> str | None:
+    """Validate one decoded_fec_signal_*.bin file. Returns error str or None."""
+    if len(fec_bytes) != DECODED_FEC_FILE_LEN:
+        return f"{fec_name}: {len(fec_bytes)} bytes, expected {DECODED_FEC_FILE_LEN}"
+    if any(b not in (0, 1) for b in fec_bytes):
+        bad_idx = next(i for i, b in enumerate(fec_bytes) if b not in (0, 1))
+        return f"{fec_name}: non-{{0,1}} byte at offset {bad_idx} (value {fec_bytes[bad_idx]})"
+    input_path = INPUTS_DIR / _input_filename_for(source_frame)
+    if not input_path.exists():
+        return f"{fec_name}: companion {input_path.name} missing under inputs/"
+    expected = input_path.read_bytes()
+    if len(expected) != INPUT_BYTE_COUNT:
+        return (
+            f"{fec_name}: companion {input_path.name} is "
+            f"{len(expected)} bytes, expected {INPUT_BYTE_COUNT}"
+        )
+    if fec_bytes == expected:
+        return None
+    first = next(i for i, (a, b) in enumerate(zip(fec_bytes, expected, strict=True)) if a != b)
+    return (
+        f"{fec_name}: first FEC byte mismatch at index {first} "
+        f"(expected {expected[first]}, got {fec_bytes[first]})"
+    )
+
+
+# ─────────────────────────────── diff-decode ───────────────────────────────
+
+
+def cmd_diff_decode(args: argparse.Namespace) -> int:
+    """Validate a third party's decoded outputs against the original input.
+
+    Default — the interoperability-plan **Level 4 pass criterion**
+    ("Decoded data matches original input exactly"): for every signal in
+    SIGNAL_TEST_VECTORS, ``<other_dir>/decoded_signal_*.bin`` is compared
+    byte-for-byte against ``frames/<source>[64:6064]`` (channel-symbol
+    layer) and ``<other_dir>/decoded_fec_signal_*.bin`` against
+    ``inputs/<source>_input.bin`` (post-FEC layer), with first-mismatch
+    localisation.  This is exactly the comparison ``check-decode`` runs on
+    our own reference outputs — applied to a third-party directory, with
+    no indirection through our decoder's rendering.
+
+    With ``--vs-pocketsdr``, additionally diff ``<other_dir>`` against the
+    bundled ``references/pocketsdr-afs/decoded/`` reference (secondary,
+    optional — "do you match our specific decoder's output too").
+    """
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+
+    total = len(SIGNAL_TEST_VECTORS)
+    chan_ok, chan_missing, fec_ok, fec_missing, failures = _diff_decode_vs_input(other)
+    print("vs original input (frames/ + inputs/) — Level 4 pass criterion:")
+    print(f"  Channel-symbol vs frames/:  {chan_ok:>2}/{total}  (missing: {chan_missing})")
+    print(f"  Post-FEC vs inputs/:        {fec_ok:>2}/{total}  (missing: {fec_missing})")
+
+    if args.vs_pocketsdr:
+        ps_chan, ps_fec, secondary = _diff_decode_vs_pocketsdr(other)
+        print("\nvs PocketSDR reference decode (secondary):")
+        print(f"  Channel-symbol: {ps_chan:>2}/{total}")
+        print(f"  Post-FEC:       {ps_fec:>2}/{total}")
+        failures = failures + secondary
+
+    if failures:
+        print(f"\n{len(failures)} difference(s) (first 10):", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print("\nOK — decoded data matches original input exactly.")
+    return 0
+
+
+def _diff_decode_vs_input(other: Path) -> tuple[int, int, int, int, list[str]]:
+    """Validate <other> against frames/+inputs/ (the Level 4 pass criterion).
+
+    Returns (chan_ok, chan_missing, fec_ok, fec_missing, failures).
+    """
+    failures: list[str] = []
+    chan_ok = chan_missing = fec_ok = fec_missing = 0
+    for signal_filename, _prn, source_frame in SIGNAL_TEST_VECTORS:
+        chan_name = _decoded_filename_for(signal_filename)
+        chan_path = other / chan_name
+        if not chan_path.exists():
+            chan_missing += 1
+            failures.append(f"{chan_name}: missing in {other}")
+        elif (e := _verify_decoded_chan(chan_name, chan_path.read_bytes(), source_frame)) is None:
+            chan_ok += 1
+        else:
+            failures.append(e)
+
+        fec_name = _decoded_fec_filename_for(signal_filename)
+        fec_path = other / fec_name
+        if not fec_path.exists():
+            fec_missing += 1
+            failures.append(f"{fec_name}: missing in {other}")
+        elif (e := _verify_decoded_fec(fec_name, fec_path.read_bytes(), source_frame)) is None:
+            fec_ok += 1
+        else:
+            failures.append(e)
+    return chan_ok, chan_missing, fec_ok, fec_missing, failures
+
+
+def _diff_decode_vs_pocketsdr(other: Path) -> tuple[int, int, list[str]]:
+    """Secondary diff of <other> against the bundled PocketSDR reference.
+
+    Returns (chan_matches, fec_matches, failures).  Missing files are not
+    re-reported here — the primary pass already flags them.
+    """
+    failures: list[str] = []
+    ps_chan = ps_fec = 0
+    for signal_filename, _prn, _sf in SIGNAL_TEST_VECTORS:
+        cn = _decoded_filename_for(signal_filename)
+        fn = _decoded_fec_filename_for(signal_filename)
+        ce = _diff_one(POCKETSDR_DECODED_DIR / cn, other / cn, DECODED_FILE_LEN)
+        fe = _diff_one(POCKETSDR_DECODED_DIR / fn, other / fn, DECODED_FEC_FILE_LEN)
+        if ce is None:
+            ps_chan += 1
+        elif ce != "_missing_":
+            failures.append(ce)
+        if fe is None:
+            ps_fec += 1
+        elif fe != "_missing_":
+            failures.append(fe)
+    return ps_chan, ps_fec, failures
+
+
+def _diff_one(ours_path: Path, their_path: Path, expected_len: int) -> str | None:
+    """Compare two binary files. Returns None on match, error string on mismatch.
+
+    Returns the literal token ``"_missing_"`` if the user-side file is absent
+    so the caller can tally it separately.
+    """
+    if not their_path.exists():
+        return "_missing_"
+    try:
+        ours_bytes = ours_path.read_bytes()
+        their_bytes = their_path.read_bytes()
+    except OSError as exc:
+        return f"{their_path.name}: read error ({exc})"
+    if len(their_bytes) != expected_len:
+        return f"{their_path.name}: their file is {len(their_bytes)} bytes, expected {expected_len}"
+    if ours_bytes == their_bytes:
+        return None
+    first = next(i for i, (a, b) in enumerate(zip(ours_bytes, their_bytes, strict=True)) if a != b)
+    return (
+        f"{their_path.name}: first byte mismatch at index {first} "
+        f"(expected {ours_bytes[first]}, got {their_bytes[first]})"
+    )
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -1309,10 +1625,40 @@ def cmd_verify_manifest(_args: argparse.Namespace) -> int:
 # ─────────────────────────────── rebuild-manifest ──────────────────────────
 
 
+# Path components and suffixes that are git-ignored generated artefacts.
+# Anything matching is skipped by _rebuild_manifest so a maintainer's local
+# build state cannot leak into the SHA-pinned distribution.
+_GENERATED_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".tox",
+    }
+)
+_GENERATED_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo", ".pyd"})
+
+
+def _is_generated_artefact(path: Path) -> bool:
+    """Return True if ``path`` looks like a build/cache product that must
+    not appear in manifest.json."""
+    if path.suffix in _GENERATED_SUFFIXES:
+        return True
+    return any(part in _GENERATED_DIR_NAMES for part in path.parts)
+
+
 def _rebuild_manifest() -> int:
     """Recompute SHA256s over codes/ and references/ and overwrite manifest.json.
 
     Returns the number of files hashed.
+
+    Excludes generated artefacts (Python bytecode, common cache dirs) so
+    a maintainer who has imported the harness modules locally — which
+    Python silently writes ``.pyc`` files into ``references/pocketsdr-afs/
+    harnesses/__pycache__/`` for — does not pull those non-tracked files
+    into the manifest.  If they leaked in, ``verify-manifest`` would fail
+    on every clean checkout.
     """
     entries: dict[str, str] = {}
     for sub in ("codes", "frames", "inputs", "signals", "references"):
@@ -1321,6 +1667,8 @@ def _rebuild_manifest() -> int:
             continue
         for p in sorted(base.rglob("*")):
             if not p.is_file() or p.name.startswith("."):
+                continue
+            if _is_generated_artefact(p):
                 continue
             entries[p.relative_to(REPO_ROOT).as_posix()] = sha256(p)
 
@@ -1336,7 +1684,7 @@ def _rebuild_manifest() -> int:
     manifest.update(
         {
             "version": "1.0",
-            "levels": [1, 2, 3],
+            "levels": [1, 2, 3, 4],
             "implementation": "LuarSpace",
             "spec": "LSIS-AFS V1.0, 29 January 2025",
             "oracles": [
@@ -1345,6 +1693,8 @@ def _rebuild_manifest() -> int:
                 "LSIS-AFS V1.0 §2.4 + Gateway 3 checklist — L2 structural",
                 "interoperability.pdf Signal Export Format + LSIS V1.0 §4 + first-chip "
                 "polarity (chains L1 codes + L2 sync prefix into L3) — L3 structural",
+                "PocketSDR-AFS (BSD-2-Clause, © 2025 Takuji Ebinuma; pinned SHA "
+                "5b23809f30d68518b7fad7a564fd0fac57cc497d) — L4 cross-decode",
             ],
             "files": dict(sorted(entries.items())),
         }
@@ -1410,7 +1760,7 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="validate.py",
-        description="LSIS-AFS interoperability test-vector validator (Levels 1-3).",
+        description="LSIS-AFS interoperability test-vector validator (Levels 1-4).",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -1488,6 +1838,27 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing signal_*_12s.iq[.gz] files to compare against ours.",
     )
     p_diff_signals.set_defaults(func=cmd_diff_signals)
+
+    sub.add_parser(
+        "check-decode",
+        help="Verify references/pocketsdr-afs/decoded/ matches frames/ payloads (L4 oracle).",
+    ).set_defaults(func=cmd_check_decode)
+
+    p_diff_decode = sub.add_parser(
+        "diff-decode",
+        help="Validate a third party's decoded outputs against the original input "
+        "(frames/ + inputs/) — the Level 4 pass criterion.",
+    )
+    p_diff_decode.add_argument(
+        "other_dir",
+        help="Directory of decoded_signal_*.bin / decoded_fec_signal_*.bin to validate.",
+    )
+    p_diff_decode.add_argument(
+        "--vs-pocketsdr",
+        action="store_true",
+        help="Also diff against the bundled PocketSDR reference decode (secondary).",
+    )
+    p_diff_decode.set_defaults(func=cmd_diff_decode)
 
     sub.add_parser(
         "verify-manifest",

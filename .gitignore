@@ -13,3 +13,6 @@ dist/
 # any future level-specific normative PDFs).
 *.pdf
 !references/*.pdf
+
+# Claude Code session state — per-user, never tracked.
+.claude/
