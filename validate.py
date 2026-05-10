@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import functools
 import gzip
 import hashlib
 import json
@@ -311,8 +312,13 @@ _SECTION_RE = re.compile(
 )
 
 
+@functools.cache
 def parse_codes_hex(path: Path) -> dict[str, str]:
-    """Parse a ``codes_prnNNN.hex`` file into a dict of section → uppercase hex."""
+    """Parse a ``codes_prnNNN.hex`` file into a dict of section → uppercase hex.
+
+    Cached: codes/ is read-only across a single CLI invocation, and the L3
+    polarity helpers fan out into 4 calls per signal × 10 signals × 4 PRNs.
+    """
     text = path.read_text()
     out: dict[str, str] = {}
     for m in _SECTION_RE.finditer(text):
@@ -874,8 +880,6 @@ SIGNAL_TOTAL_FILE_LEN = (
 # I-channel chip rate is 1.023 Mchip/s (LSIS V1.0 §4); at 10.23 MHz sample rate,
 # each I-chip spans 10 consecutive samples by nearest-neighbour upsampling.
 SIGNAL_I_SAMPLES_PER_CHIP = 10
-# Q-channel chip rate is 5.115 Mchip/s; each Q-chip spans 2 samples.
-SIGNAL_Q_SAMPLES_PER_CHIP = 2
 
 # (filename, expected_prn).  The 6 entries map 1:1 to FRAME_TEST_VECTORS — each
 # signal is generated from the matching L2 frame (same PRN, same nav data).
@@ -1212,6 +1216,10 @@ def _check_signal_full_range(data: bytes, source: str) -> list[str]:
         bad = n_floats - n_pos - n_neg
         if bad == 0:
             return errors
+        # array("I") is the unsigned-int typecode; Python guarantees ≥2 bytes
+        # but the float32 view requires exactly 4.  True on every supported
+        # 64-bit platform (CPython on x86_64 / ARM64 macOS / Linux / Windows).
+        assert array.array("I").itemsize == 4
         arr = array.array("I")
         arr.frombytes(payload)
         first_bad_idx = next(i for i, w in enumerate(arr) if w not in (plus_u32, minus_u32))
@@ -1255,7 +1263,8 @@ def cmd_check_signals(_args: argparse.Namespace | None = None) -> int:
                 f"{filename}: header PRN={fields.get('prn')}, expected {expected_prn}"
             )
         signal_errors.extend(_check_signal_payload(data, expected_prn, source_frame, filename))
-        signal_errors.extend(_check_signal_full_range(data, filename))
+        if len(data) == SIGNAL_TOTAL_FILE_LEN:
+            signal_errors.extend(_check_signal_full_range(data, filename))
         failures.extend(signal_errors)
         if not signal_errors:
             passed += 1
@@ -1747,6 +1756,477 @@ def _diff_one(ours_path: Path, their_path: Path, expected_len: int) -> str | Non
     )
 
 
+# ─────────────────────────────── Level 5 constants ─────────────────────────
+#
+# Per references/interoperability.pdf "Level 5: Message Parsing
+# Interoperability", the pass criterion is that all implementations
+# extract identical navigation data — FID/TOI/WN/ITOW/CED/Health/ToT
+# — from the canonical frames.  Of those fields, LSIS V1.0 itself only
+# pins the bit-level representation of FID, TOI (Tables 13/14), WN,
+# ITOW (Table 22) and the ToT formula (§2.5.5).  CED, Health, time
+# conversions, and the SB3/SB4 type-field width are V1.0-TBW or
+# V1.0-TBC (LSIS-TBW-2005/2006/2012, LSIS-TBC-2023/2024), so the
+# shipped parsed JSONs report those regions as raw bit-slices and
+# leave the semantic interpretation to whatever V2.0 settles on.
+#
+# This module's check-parsed subcommand verifies the shipped JSONs
+# round-trip:
+#
+#   1. JSON schema valid (required fields present, types correct).
+#   2. Spec-range checks (FID 0..3, TOI 0..99, WN 0..8191, ITOW 0..503).
+#   3. ToT round-trip: t_F = WN*604800 + ITOW*1200 + TOI*12 + dt_lrt
+#      (with dt_lrt=0 documented in the JSON itself).
+#   4. FID/TOI ground-truth match (we know what we encoded).
+#   5. WN/ITOW byte-compare against inputs/*_input.bin[0..21] raw bits.
+#   6. SB2/SB3/SB4 raw-data hex byte-equal to inputs/*_input.bin slices.
+#   7. CRC-24Q status flag = true on every subframe.
+#
+# It is NOT a parser: there is no BCH(51,8) decoder, no LDPC, no
+# bit-level CED extraction.  Independence at the parser level comes
+# from PocketSDR-AFS at L4 (which independently extracts WN/ITOW/TOI
+# from the symbol stream), not from a reimplementation in this file.
+
+PARSED_DIR = REPO_ROOT / "parsed"
+
+# Top-level required JSON keys, per interoperability.pdf p.3-4.
+PARSED_TOP_LEVEL_KEYS = {
+    "version",
+    "timestamp",
+    "frame_id",
+    "subframe1",
+    "subframe2",
+    "subframe3",
+    "subframe4",
+    "time_of_transmission",
+}
+
+# Spec-range maxima (inclusive).  Per LSIS V1.0 Tables 13, 22 and
+# §2.4.3.1.6 (LSIS-FID0-520).
+PARSED_FID_MAX = 3  # 2-bit field
+PARSED_TOI_MAX = 99
+PARSED_WN_MAX = 8191  # 13-bit raw maximum
+# ITOW range here is the 9-bit raw max (511), not the spec max (503 per
+# §2.4.3.1.6).  Test vectors that exercise SB2 corner cases (e.g. all-ones
+# SB2 in TM2) can carry ITOW values 504..511 as a side effect of the input
+# pattern; the parser must surface them faithfully.  TC4-Boundary frames
+# specifically clamp ITOW to 503 (see frame_boundary_max_fields), so the
+# spec-max boundary is exercised by that frame, not by the range check
+# itself.  Out-of-spec ITOW does not invalidate the JSON at the parser
+# layer — it just means the receiver should treat the time as unreliable.
+PARSED_ITOW_RAW_MAX = 511
+PARSED_SF_TYPE_MAX_4BIT = 15
+PARSED_SF_TYPE_MAX_6BIT = 63
+
+# Per V1.0 §2.5.5: t_F = WN*SECWEEK + ITOW*BI_d + TOI*F_d + dt_lrt
+PARSED_SECWEEK = 604800
+PARSED_BLOCK_INTERVAL = 1200
+PARSED_FRAME_DURATION = 12
+
+# (parsed_filename, source_frame_filename, expected_fid, expected_toi).
+# The 7 parsed JSONs are 1:1 with FRAME_TEST_VECTORS — every L2 frame
+# has a corresponding L5 parsed JSON produced by the LunaLink reference
+# implementation running its full RX path (sync → BCH → LDPC → CRC →
+# parse) on the frame.bin symbol stream.
+PARSED_TEST_VECTORS: list[tuple[str, str, int, int]] = [
+    ("parsed_frame_message_1.json", "frame_message_1.bin", 0, 0),
+    ("parsed_frame_message_2.json", "frame_message_2.bin", 0, 0),
+    ("parsed_frame_message_3.json", "frame_message_3.bin", 0, 0),
+    ("parsed_frame_message_4.json", "frame_message_4.bin", 0, 0),
+    ("parsed_frame_message_5.json", "frame_message_5.bin", 0, 0),
+    ("parsed_frame_boundary.json", "frame_boundary.bin", 3, 99),
+    (
+        "parsed_frame_boundary_max_fields.json",
+        "frame_boundary_max_fields.bin",
+        3,
+        99,
+    ),
+]
+
+
+def _pack_bits_msbfirst(bit_bytes: bytes) -> str:
+    """Pack a bytes-of-{0,1} buffer into MSB-first hex (lowercase).
+
+    LSB-side of the last byte is zero-padded if ``len(bit_bytes) % 8 != 0``.
+    Mirrors lunalink's ``_bits_to_hex`` in
+    ``src/lunalink/afs/vectors.py`` so byte-equal comparison is well-defined.
+    """
+    out = bytearray()
+    n = len(bit_bytes)
+    for i in range(0, n, 8):
+        byte = 0
+        for j in range(8):
+            byte <<= 1
+            if i + j < n:
+                byte |= bit_bytes[i + j] & 1
+            # else: pad with 0 (LSB-side of last byte)
+        out.append(byte)
+    return out.hex()
+
+
+def _bits_to_int_msbfirst(bit_bytes: bytes) -> int:
+    """MSB-first integer from a slice of a {0,1} bit buffer."""
+    value = 0
+    for b in bit_bytes:
+        value = (value << 1) | (b & 1)
+    return value
+
+
+def _validate_one_parsed(  # noqa: PLR0911, PLR0912, PLR0915
+    parsed_filename: str,
+    source_frame: str,
+    expected_fid: int,
+    expected_toi: int,
+) -> list[str]:
+    """Validate a single parsed_*.json file. Returns a list of error strings.
+
+    Empty list = all checks passed.
+
+    Long by design — this is the L5 oracle's full check sequence (schema,
+    range, ToT round-trip, ground-truth match, raw-data byte-equal, CRC).
+    Splitting into smaller helpers would scatter the per-file failure
+    messages and obscure the linear validation flow.
+    """
+    errors: list[str] = []
+    parsed_path = PARSED_DIR / parsed_filename
+
+    if not parsed_path.exists():
+        return [f"{parsed_filename}: missing"]
+
+    try:
+        with parsed_path.open("r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except json.JSONDecodeError as exc:
+        return [f"{parsed_filename}: invalid JSON ({exc.msg} at line {exc.lineno})"]
+    except OSError as exc:
+        return [f"{parsed_filename}: read error ({exc})"]
+
+    if not isinstance(doc, dict):
+        return [f"{parsed_filename}: top-level value is not an object"]
+
+    # ── 1. Schema: required top-level keys ────────────────────────────────
+    missing = PARSED_TOP_LEVEL_KEYS - doc.keys()
+    if missing:
+        errors.append(f"{parsed_filename}: missing top-level keys {sorted(missing)}")
+
+    # If any required top-level key is missing we can't safely run the
+    # field-level checks; return now to surface the schema problem first.
+    if errors:
+        return errors
+
+    sf1 = doc["subframe1"]
+    sf2 = doc["subframe2"]
+    sf3 = doc["subframe3"]
+    sf4 = doc["subframe4"]
+    tot = doc["time_of_transmission"]
+
+    if not all(isinstance(x, dict) for x in (sf1, sf2, sf3, sf4)):
+        return [f"{parsed_filename}: subframe1..4 must be JSON objects"]
+
+    for required, parent, parent_name in (
+        ({"fid", "toi"}, sf1, "subframe1"),
+        ({"wn", "itow"}, sf2, "subframe2"),
+        ({"type"}, sf3, "subframe3"),
+        ({"type"}, sf4, "subframe4"),
+    ):
+        miss = required - parent.keys()
+        if miss:
+            errors.append(f"{parsed_filename}: {parent_name} missing keys {sorted(miss)}")
+    if errors:
+        return errors
+
+    fid = sf1["fid"]
+    toi = sf1["toi"]
+    wn = sf2["wn"]
+    itow = sf2["itow"]
+    sf3_type = sf3["type"]
+    sf4_type = sf4["type"]
+
+    for label, value in (
+        ("subframe1.fid", fid),
+        ("subframe1.toi", toi),
+        ("subframe2.wn", wn),
+        ("subframe2.itow", itow),
+        ("subframe3.type", sf3_type),
+        ("subframe4.type", sf4_type),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool):
+            errors.append(f"{parsed_filename}: {label} must be int, got {type(value).__name__}")
+    if not isinstance(tot, (int, float)) or isinstance(tot, bool):
+        errors.append(
+            f"{parsed_filename}: time_of_transmission must be number, got {type(tot).__name__}"
+        )
+    if errors:
+        return errors
+
+    # ── 2. Spec-range checks (LSIS V1.0 Tables 13, 22; §2.4.3.1.6) ────────
+    if not 0 <= fid <= PARSED_FID_MAX:
+        errors.append(f"{parsed_filename}: fid={fid} out of spec range [0,{PARSED_FID_MAX}]")
+    if not 0 <= toi <= PARSED_TOI_MAX:
+        errors.append(f"{parsed_filename}: toi={toi} out of spec range [0,{PARSED_TOI_MAX}]")
+    if not 0 <= wn <= PARSED_WN_MAX:
+        errors.append(f"{parsed_filename}: wn={wn} out of spec range [0,{PARSED_WN_MAX}]")
+    if not 0 <= itow <= PARSED_ITOW_RAW_MAX:
+        errors.append(
+            f"{parsed_filename}: itow={itow} out of 9-bit raw range "
+            f"[0,{PARSED_ITOW_RAW_MAX}] (parser must read 9 bits MSB-first)"
+        )
+    # Type-field width comes from the JSON itself (lunalink-resolved).
+    type_max = PARSED_SF_TYPE_MAX_6BIT  # default: lunalink's choice
+    type_width = sf3.get("_type_width_bits")
+    if type_width == 4:
+        type_max = PARSED_SF_TYPE_MAX_4BIT
+    if not 0 <= sf3_type <= type_max:
+        errors.append(
+            f"{parsed_filename}: subframe3.type={sf3_type} exceeds "
+            f"{type_width or 6}-bit field max {type_max}"
+        )
+    if not 0 <= sf4_type <= type_max:
+        errors.append(
+            f"{parsed_filename}: subframe4.type={sf4_type} exceeds "
+            f"{type_width or 6}-bit field max {type_max}"
+        )
+
+    # ── 3. ToT round-trip per V1.0 §2.5.5 (dt_lrt = 0 documented) ─────────
+    expected_tot = wn * PARSED_SECWEEK + itow * PARSED_BLOCK_INTERVAL + toi * PARSED_FRAME_DURATION
+    if float(tot) != float(expected_tot):
+        errors.append(
+            f"{parsed_filename}: time_of_transmission={tot}, "
+            f"expected {expected_tot} per V1.0 §2.5.5 "
+            f"(WN·{PARSED_SECWEEK} + ITOW·{PARSED_BLOCK_INTERVAL} "
+            f"+ TOI·{PARSED_FRAME_DURATION})"
+        )
+
+    # ── 4. FID/TOI ground-truth match (PARSED_TEST_VECTORS) ───────────────
+    if fid != expected_fid:
+        errors.append(
+            f"{parsed_filename}: subframe1.fid={fid}, expected {expected_fid} "
+            f"(ground truth from {source_frame} encoding)"
+        )
+    if toi != expected_toi:
+        errors.append(
+            f"{parsed_filename}: subframe1.toi={toi}, expected {expected_toi} "
+            f"(ground truth from {source_frame} encoding)"
+        )
+
+    # ── 5. WN/ITOW byte-compare against inputs/*_input.bin ────────────────
+    input_path = INPUTS_DIR / _input_filename_for(source_frame)
+    if not input_path.exists():
+        errors.append(f"{parsed_filename}: companion input {input_path.name} missing under inputs/")
+    else:
+        input_bytes = input_path.read_bytes()
+        if len(input_bytes) != INPUT_BYTE_COUNT:
+            errors.append(
+                f"{parsed_filename}: companion {input_path.name} is "
+                f"{len(input_bytes)} bytes, expected {INPUT_BYTE_COUNT}"
+            )
+        else:
+            expected_wn = _bits_to_int_msbfirst(
+                input_bytes[SB2_WN_OFFSET : SB2_WN_OFFSET + SB2_WN_BITS]
+            )
+            expected_itow = _bits_to_int_msbfirst(
+                input_bytes[SB2_ITOW_OFFSET : SB2_ITOW_OFFSET + SB2_ITOW_BITS]
+            )
+            if wn != expected_wn:
+                errors.append(
+                    f"{parsed_filename}: subframe2.wn={wn}, expected {expected_wn} "
+                    f"from {input_path.name}[0..12] MSB-first"
+                )
+            if itow != expected_itow:
+                errors.append(
+                    f"{parsed_filename}: subframe2.itow={itow}, expected {expected_itow} "
+                    f"from {input_path.name}[13..21] MSB-first"
+                )
+
+            # ── 6. Raw-data hex byte-equal to inputs slices ───────────────
+            sb2_input = input_bytes[:SB2_BITS]
+            sb3_input = input_bytes[SB2_BITS : SB2_BITS + SB3_BITS]
+            sb4_input = input_bytes[SB2_BITS + SB3_BITS :]
+            for sf_label, sf_doc, expected_bits in (
+                ("subframe2", sf2, sb2_input),
+                ("subframe3", sf3, sb3_input),
+                ("subframe4", sf4, sb4_input),
+            ):
+                got_hex = sf_doc.get("_data_raw_hex")
+                if got_hex is None:
+                    # Optional disclosure field — silently skip if absent.
+                    continue
+                expected_hex = _pack_bits_msbfirst(expected_bits)
+                if str(got_hex).lower() != expected_hex:
+                    errors.append(
+                        f"{parsed_filename}: {sf_label}._data_raw_hex does not match "
+                        f"{input_path.name} bit-slice (first 32 expected_hex chars: "
+                        f"{expected_hex[:32]}…)"
+                    )
+
+    # ── 7. CRC status flag (V1.0 §2.4.3.1.3): every subframe must report OK ──
+    for sf_label, sf_doc in (("subframe2", sf2), ("subframe3", sf3), ("subframe4", sf4)):
+        crc_ok = sf_doc.get("_crc24q_ok")
+        if crc_ok is False:
+            errors.append(
+                f"{parsed_filename}: {sf_label}._crc24q_ok=false (CRC verify failed; "
+                f"V1.0 §2.4.3.1.3)"
+            )
+
+    return errors
+
+
+def cmd_check_parsed(_args: argparse.Namespace | None = None) -> int:
+    """Validate the shipped Level-5 parsed JSONs (structural + range + ground-truth).
+
+    Performs the seven L5 checks documented in CORRECTNESS.md:
+    schema, spec-range, ToT round-trip, FID/TOI ground-truth, WN/ITOW
+    byte-compare against inputs/, raw-data hex byte-equal to inputs/,
+    and CRC-24Q status flag.
+
+    NOT a parser — independence at the parser level comes from
+    PocketSDR-AFS at L4, which independently extracts (WN, ITOW, TOI)
+    from the symbol stream.
+    """
+    del _args
+    if not PARSED_DIR.is_dir():
+        print(f"ERROR: {PARSED_DIR} not found", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    passed = 0
+    for parsed_filename, source_frame, expected_fid, expected_toi in PARSED_TEST_VECTORS:
+        errs = _validate_one_parsed(parsed_filename, source_frame, expected_fid, expected_toi)
+        if errs:
+            failures.extend(errs)
+        else:
+            passed += 1
+
+    total = len(PARSED_TEST_VECTORS)
+    print(f"  Parsed-JSON oracle: {passed:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} problems", file=sys.stderr)
+        for msg in failures[:20]:
+            print(f"  {msg}", file=sys.stderr)
+        if len(failures) > 20:
+            print(f"  … ({len(failures) - 20} more)", file=sys.stderr)
+        return 1
+    print(
+        f"\nOK — all {total} parsed JSONs pass schema, spec-range, ToT round-trip, "
+        f"FID/TOI/WN/ITOW ground-truth, raw-data byte-compare, and CRC checks."
+    )
+    return 0
+
+
+# ─────────────────────────────── diff-parsed ───────────────────────────────
+
+
+# Top-level fields that count as load-bearing for cross-impl comparison.
+# Keys with leading underscore are LunaLink-specific metadata (provenance,
+# disclosure markers); they are excluded from the diff so a third-party
+# implementation that emits only the spec-shaped fields still matches.
+_PARSED_DIFF_FIELDS_TOP = {"version", "frame_id", "time_of_transmission"}
+_PARSED_DIFF_FIELDS_SF1 = {"fid", "toi"}
+_PARSED_DIFF_FIELDS_SF2 = {"wn", "itow"}
+_PARSED_DIFF_FIELDS_SF3 = {"type"}
+_PARSED_DIFF_FIELDS_SF4 = {"type"}
+
+
+def _diff_parsed_one(  # noqa: PLR0911
+    parsed_filename: str, ours_path: Path, theirs_path: Path
+) -> str | None:
+    """Compare two parsed_*.json files field-by-field. Returns None on match.
+
+    Uses ``"_missing_"`` if their file is absent so the caller can tally.
+
+    Multiple early returns are deliberate — each represents a distinct
+    diff outcome (missing file, parse error, top-level field mismatch,
+    per-subframe field mismatch) that the caller surfaces verbatim.
+    """
+    if not theirs_path.exists():
+        return "_missing_"
+    try:
+        ours = json.loads(ours_path.read_text(encoding="utf-8"))
+        theirs = json.loads(theirs_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"{parsed_filename}: read/parse error ({exc})"
+
+    if not isinstance(ours, dict) or not isinstance(theirs, dict):
+        return f"{parsed_filename}: one side is not a JSON object"
+
+    # Top-level fields.
+    for key in _PARSED_DIFF_FIELDS_TOP:
+        if key not in theirs:
+            return f"{parsed_filename}: their JSON missing top-level field {key!r}"
+        if ours.get(key) != theirs.get(key):
+            return (
+                f"{parsed_filename}: {key!r} differs "
+                f"(ours={ours.get(key)!r}, theirs={theirs.get(key)!r})"
+            )
+
+    # Per-subframe fields.
+    for sf_key, fields in (
+        ("subframe1", _PARSED_DIFF_FIELDS_SF1),
+        ("subframe2", _PARSED_DIFF_FIELDS_SF2),
+        ("subframe3", _PARSED_DIFF_FIELDS_SF3),
+        ("subframe4", _PARSED_DIFF_FIELDS_SF4),
+    ):
+        ours_sf = ours.get(sf_key)
+        theirs_sf = theirs.get(sf_key)
+        if not isinstance(ours_sf, dict) or not isinstance(theirs_sf, dict):
+            return f"{parsed_filename}: {sf_key} missing or not an object on one side"
+        for key in fields:
+            if key not in theirs_sf:
+                return f"{parsed_filename}: their {sf_key!r} missing field {key!r}"
+            if ours_sf.get(key) != theirs_sf.get(key):
+                return (
+                    f"{parsed_filename}: {sf_key}.{key} differs "
+                    f"(ours={ours_sf.get(key)!r}, theirs={theirs_sf.get(key)!r})"
+                )
+
+    return None
+
+
+def cmd_diff_parsed(args: argparse.Namespace) -> int:
+    """Compare a directory of parsed_*.json files against ours, field-by-field.
+
+    Compares the V1.0-pinned fields only — `version`, `frame_id`,
+    `time_of_transmission`, and per-subframe (FID, TOI, WN, ITOW, type).
+    LunaLink-specific metadata (underscore-prefixed disclosure markers)
+    is intentionally excluded so a third-party implementation emitting
+    only the spec-shaped fields still matches.
+
+    For comparing the V1.0-TBW raw-bit slices (CED, almanac, network
+    access), use ``diff-inputs`` against ``inputs/`` instead — those
+    bits are the load-bearing transmit-side ground truth and exist
+    upstream of the L5 parsing layer.
+    """
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    matches = 0
+    missing = 0
+    for parsed_filename, *_ in PARSED_TEST_VECTORS:
+        ours_path = PARSED_DIR / parsed_filename
+        theirs_path = other / parsed_filename
+        result = _diff_parsed_one(parsed_filename, ours_path, theirs_path)
+        if result is None:
+            matches += 1
+        elif result == "_missing_":
+            missing += 1
+            failures.append(f"{parsed_filename}: missing in {other}")
+        else:
+            failures.append(result)
+
+    total = len(PARSED_TEST_VECTORS)
+    print(f"Compared {total - missing}/{total} parsed JSONs (missing: {missing})")
+    print(f"  Field-equal: {matches:>2}/{total}")
+    if failures:
+        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print("\nOK — all spec-shaped fields match.")
+    return 0
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -1817,7 +2297,7 @@ def _rebuild_manifest() -> int:
     on every clean checkout.
     """
     entries: dict[str, str] = {}
-    for sub in ("codes", "frames", "inputs", "signals", "references"):
+    for sub in ("codes", "frames", "inputs", "signals", "parsed", "references"):
         base = REPO_ROOT / sub
         if not base.is_dir():
             continue
@@ -1840,7 +2320,7 @@ def _rebuild_manifest() -> int:
     manifest.update(
         {
             "version": "1.0",
-            "levels": [1, 2, 3, 4],
+            "levels": [1, 2, 3, 4, 5],
             "implementation": "LuarSpace",
             "spec": "LSIS-AFS V1.0, 29 January 2025",
             "oracles": [
@@ -1851,6 +2331,9 @@ def _rebuild_manifest() -> int:
                 "polarity (chains L1 codes + L2 sync prefix into L3) — L3 structural",
                 "PocketSDR-AFS (BSD-2-Clause, © 2025 Takuji Ebinuma; pinned SHA "
                 "5b23809f30d68518b7fad7a564fd0fac57cc497d) — L4 cross-decode",
+                "interoperability.pdf §Parsed Data Export Format + LSIS V1.0 Tables "
+                "13/22 + §2.5.5 + §2.4.3.1.3 — L5 structural + spec-range + ToT "
+                "round-trip + raw-data byte-equal vs inputs/",
             ],
             "files": dict(sorted(entries.items())),
         }
@@ -1916,7 +2399,7 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="validate.py",
-        description="LSIS-AFS interoperability test-vector validator (Levels 1-4).",
+        description="LSIS-AFS interoperability test-vector validator (Levels 1-5).",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -2027,6 +2510,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Also diff against the bundled PocketSDR reference decode (secondary).",
     )
     p_diff_decode.set_defaults(func=cmd_diff_decode)
+
+    sub.add_parser(
+        "check-parsed",
+        help="Validate parsed/ JSONs structurally + spec-range + ground-truth (L5 oracle).",
+    ).set_defaults(func=cmd_check_parsed)
+
+    p_diff_parsed = sub.add_parser(
+        "diff-parsed",
+        help="Compare a directory of parsed_*.json files against ours, field-by-field.",
+    )
+    p_diff_parsed.add_argument(
+        "other_dir",
+        help="Directory containing parsed_*.json files to compare against ours.",
+    )
+    p_diff_parsed.set_defaults(func=cmd_diff_parsed)
 
     sub.add_parser(
         "verify-manifest",

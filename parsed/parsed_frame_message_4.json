@@ -1,0 +1,87 @@
+{
+  "version": "1.0",
+  "timestamp": "2025-01-29T00:00:00+00:00",
+  "frame_id": "frame_message_4",
+  "implementation": "LunaLink",
+  "lsis_version": "V1.0 (29 January 2025)",
+  "subframe1": {
+    "fid": 0,
+    "toi": 0,
+    "_lsis_ref": "Tables 13, 14 (\u00a72.4.2.2)"
+  },
+  "subframe2": {
+    "wn": 0,
+    "itow": 64,
+    "ced": {
+      "_status": "tbw",
+      "_lsis_ref": "LSIS-TBW-2006 (\u00a72.5.3)",
+      "_note": "CED bit-level layout TBW per LSIS V1.0. Raw bit-slice spans SB2 bits 22..1149 (full TBW region). See _data_raw_hex for byte-equal cross-impl comparison."
+    },
+    "health": {
+      "_status": "tbw",
+      "_lsis_ref": "LSIS-TBW-2005 (\u00a72.5.2)",
+      "_note": "Health bit-level layout TBW per LSIS V1.0."
+    },
+    "time_conversions": {
+      "_status": "tbw",
+      "_lsis_ref": "LSIS-TBW-2012 (\u00a72.5.20)",
+      "_note": "Time conversion fields TBW per LSIS V1.0."
+    },
+    "_spare_bits_hex": "55555540",
+    "_spare_bits_lsis_ref": "LSIS-FID0-550 (LSIS-TBC-2022)",
+    "_tbw_region_raw_hex": "80c1014181c2024282c3034383c4044484c5054585c6064686c7074787c8084888c9094989ca0a4a8acb0b4b8bcc0c4c8ccd0d4d8dce0e4e8ecf0f4f8fd0105090d1115191d2125292d3135393d4145494d5155595d6165696d7175797d8185898d9195999da1a5a9adb1b5b9bdc1c5c9cdd1d5d9dde1e5e9edf1f5f9fe02060a0e12161a1e22262a2e32363a3",
+    "_tbw_region_bit_range": [
+      22,
+      1149
+    ],
+    "_data_raw_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8d555555",
+    "_data_lsis_ref": "Table 18 (1176 data bits + 24-bit CRC)",
+    "_crc24q_ok": true,
+    "_crc24q_lsis_ref": "\u00a72.4.3.1.3 + Appendix H"
+  },
+  "subframe3": {
+    "type": 0,
+    "_type_status": "lunalink-resolved",
+    "_type_lsis_ref": "LSIS-TBC-2023 (\u00a72.4.3.1.7 Table 19) \u2014 V1.0 declares '4 or 6 bits'; LunaLink uses 6",
+    "_type_width_bits": 6,
+    "data": {
+      "_status": "tbw",
+      "_lsis_ref": "\u00a72.5.4/2.5.6/2.5.10/2.5.14/2.5.21/etc \u2014 content per type",
+      "_bit_range_in_data": [
+        6,
+        845
+      ],
+      "raw_hex": "004080c1014181c2024282c3034383c4044484c5054585c6064686c7074787c8084888c9094989ca0a4a8acb0b4b8bcc0c4c8ccd0d4d8dce0e4e8ecf0f4f8fd0105090d1115191d2125292d3135393d4145494d5155595d6165696d7175797d8185898d9195999da1a"
+    },
+    "_data_raw_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263646566676868",
+    "_data_lsis_ref": "Table 19 (846 data bits + 24-bit CRC)",
+    "_crc24q_ok": true,
+    "_crc24q_lsis_ref": "\u00a72.4.3.1.3 + Appendix H"
+  },
+  "subframe4": {
+    "type": 0,
+    "_type_status": "lunalink-resolved",
+    "_type_lsis_ref": "LSIS-TBC-2024 (\u00a72.4.3.1.8 Table 20) \u2014 V1.0 declares '4 or 6 bits'; LunaLink uses 6",
+    "_type_width_bits": 6,
+    "data": {
+      "_status": "tbw",
+      "_lsis_ref": "\u00a72.5.1 (MSG-G1 LunaNet Network Access \u2014 TBW)",
+      "_bit_range_in_data": [
+        6,
+        845
+      ],
+      "raw_hex": "004080c1014181c2024282c3034383c4044484c5054585c6064686c7074787c8084888c9094989ca0a4a8acb0b4b8bcc0c4c8ccd0d4d8dce0e4e8ecf0f4f8fd0105090d1115191d2125292d3135393d4145494d5155595d6165696d7175797d8185898d9195999da1a"
+    },
+    "_data_raw_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263646566676868",
+    "_data_lsis_ref": "Table 20 (846 data bits + 24-bit CRC)",
+    "_crc24q_ok": true,
+    "_crc24q_lsis_ref": "\u00a72.4.3.1.3 + Appendix H"
+  },
+  "time_of_transmission": 76800.0,
+  "_time_of_transmission_lsis_ref": "\u00a72.5.5 + Table 22",
+  "_time_of_transmission_formula": "tF = WN*604800 + ITOW*1200 + TOI*12 + dt_lrt",
+  "_time_of_transmission_dt_lrt_status": "tbd",
+  "_time_of_transmission_dt_lrt_lsis_ref": "LSIS-TBD-2003 (LRT epoch); dt_lrt comes from MSG-G4 (TBW); value 0 used as placeholder.",
+  "_input_frame_sha256": "16c935a21b16f56b1c0b6e8450fc8f2a2cedc70fb50350716724e8b9aa95de3a",
+  "_description": "Test Message 4 \u2014 bytewise marker pattern"
+}

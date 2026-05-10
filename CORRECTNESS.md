@@ -857,7 +857,7 @@ debuggable on first reading.
 
 ### Disk space
 
-`signals/` adds ~130 MB to the repository.  If you only need L1 / L2,
+`signals/` adds ~221 MB to the repository.  If you only need L1 / L2,
 sparse-checkout or shallow-clone them:
 
 ```bash
@@ -1153,3 +1153,245 @@ BER bounds.  All checks pass at v0.4.0; the receive-side chain is
 closed at the bit level.  Semantic field interpretation (parsing the
 SB2 byte array into typed nav-data fields like `{wn, itow, ced}`)
 arrives at L5.
+
+---
+
+# Level 5 — Message Parsing
+
+Level 5 verifies the **message-parsing layer**: starting from a decoded
+L2 frame (6000 symbols + 64-byte header), an LSIS-AFS implementation
+extracts the per-subframe navigation fields — FID, TOI, WN, ITOW, CED
+parameters, Health, time conversions, type fields, ToT — and emits them
+as a structured JSON document per the
+[`interoperability.pdf`](./references/interoperability.pdf) §"Parsed Data
+Export Format" template (page 3-4).  The competition's Level 5
+*Pass Criterion* (interop doc, p.2):
+
+> FID and TOI extracted correctly; Week Number (WN) and ITOW match
+> exactly; Clock & Ephemeris fields match exactly; Time of Transmission
+> calculated identically; All message type fields parsed correctly.
+
+This package fills L5 by shipping seven parsed JSONs under `parsed/`,
+produced by the **LunaLink reference implementation** (the LuarSpace
+generator, scheduled for public release at Phase 2) running its full RX
+path on each `frames/frame_*.bin`: sync detect → BCH(51,8) on SB1 →
+deinterleave → LDPC(1/2) on SB2/SB3/SB4 → CRC-24Q verify → field-level
+parse.
+
+## Honesty about LSIS V1.0 TBW regions
+
+LSIS V1.0 (29 January 2025) is itself incomplete on the message-content
+side.  **Of the 22 message types listed in V1.0 Table 21, only MSG-G8
+(Time of Transmission, §2.5.5) carries a complete bit-level
+specification.**  The other 21 message families are either declared
+TBW (To Be Written), TBC (To Be Confirmed), or "Not a LunaNet 1.0 item"
+placeholders:
+
+| V1.0 region | Spec status | Reference |
+|:---|:---|:---|
+| SF1 — FID, TOI                    | ✅ pinned       | Tables 13, 14 (§2.4.2.2) |
+| SF2 — WN, ITOW                    | ✅ pinned       | Table 22 + §2.5.5 |
+| SF2 — CED bit-level layout        | ⚠️ TBW         | LSIS-TBW-2006 (§2.5.3) |
+| SF2 — Health bit-level layout     | ⚠️ TBW         | LSIS-TBW-2005 (§2.5.2) |
+| SF2 — Time Conversions layout     | ⚠️ TBW         | LSIS-TBW-2012 (§2.5.20) |
+| SF2 — spare bits position         | ⚠️ TBC         | LSIS-FID0-550 + LSIS-TBC-2022 |
+| SF3 — type-field width            | ⚠️ TBC ("4 or 6 bits") | LSIS-TBC-2023 (Table 19) |
+| SF4 — type-field width            | ⚠️ TBC ("4 or 6 bits") | LSIS-TBC-2024 (Table 20) |
+| SF3, SF4 — data per type          | ⚠️ TBW (every MSG-G* in §2.5 except G8) | various |
+| ToT formula                       | ✅ pinned       | §2.5.5 |
+| CRC-24Q polynomial + position     | ✅ pinned       | §2.4.3.1.3 + Appendix H |
+
+The shipped JSONs reflect this faithfully:
+
+- **V1.0-pinned fields** are emitted as concrete values:
+  - `subframe1.fid`, `subframe1.toi` (V1.0 Tables 13, 14)
+  - `subframe2.wn`, `subframe2.itow` (V1.0 Table 22 + §2.5.5)
+  - `time_of_transmission` per V1.0 §2.5.5 formula
+    `tF = WN·604800 + ITOW·1200 + TOI·12 + dt_lrt` with `dt_lrt = 0`
+    documented in the JSON itself, since Δt_LRT comes from MSG-G4
+    (CED) which is TBW
+  - `_crc24q_ok` per subframe, V1.0 §2.4.3.1.3 + Appendix H
+- **V1.0-TBW regions** ship as raw bit-slice hex with explicit
+  `_lsis_ref` markers (`LSIS-TBW-NNNN` citations).  Consumers can
+  byte-equal-compare those slices without any implementation having
+  to invent positions V1.0 doesn't pin.
+- **V1.0-TBC type-field widths** — LunaLink resolves to 6 bits and
+  surfaces the choice via `_type_status: "lunalink-resolved"` and a
+  `_type_lsis_ref` marker citing LSIS-TBC-2023/2024 verbatim.  A
+  third-party implementation that resolved to 4-bit would surface
+  the disagreement at `diff-parsed` time.
+
+This is not a fudge: it is the *only* spec-compliant interpretation of
+L5 today.  Field-by-field parses for CED, almanac, network access, and
+the SF3/SF4 typed payloads land when V1.0 → V2.0 pins those layouts.
+Until then, raw-bit-slice byte-equality is the load-bearing claim.
+
+## JSON shape
+
+Every shipped `parsed/parsed_frame_*.json` follows the interop-PDF
+p.3-4 template:
+
+```json
+{
+  "version": "1.0",
+  "timestamp": "2025-01-29T00:00:00+00:00",
+  "frame_id": "frame_message_1",
+  "subframe1": {"fid": 0, "toi": 0, ...},
+  "subframe2": {"wn": 0, "itow": 0, "ced": {...}, "health": {...},
+                "time_conversions": {...}, ...},
+  "subframe3": {"type": 0, "data": {...}, ...},
+  "subframe4": {"type": 0, "data": {...}, ...},
+  "time_of_transmission": 0.0,
+  ...
+}
+```
+
+Top-level keys (`version`, `timestamp`, `frame_id`, `subframe1`,
+`subframe2`, `subframe3`, `subframe4`, `time_of_transmission`) match
+the spec template literally.  Within each subframe, keys are
+underscore-prefixed (`_status`, `_lsis_ref`, `_data_raw_hex`,
+`_crc24q_ok`) when they carry LunaLink-specific metadata or disclosure
+markers; non-underscore keys are spec-shaped and load-bearing.
+
+The shipped `timestamp` is pinned to the LSIS V1.0 publication date
+(`2025-01-29T00:00:00+00:00`) for byte-stable output across rebuilds —
+consistent with the L2 frame-header timestamp and L4 manifest stability
+policy.
+
+## Oracle 1 — structural + spec-range + ground-truth
+
+`validate.py check-parsed` performs seven distinct checks per JSON:
+
+| # | Check | Reference |
+|:---:|:---|:---|
+| 1 | JSON schema (required top-level + per-subframe keys) | interop-PDF §"Parsed Data Export Format" |
+| 2 | Spec-range checks: FID 0..3, TOI 0..99, WN 0..8191, ITOW 0..511 (9-bit raw), type 0..63 (6-bit) | V1.0 Tables 13, 22; §2.4.3.1.6 |
+| 3 | ToT round-trip: `t_F == WN·604800 + ITOW·1200 + TOI·12` | V1.0 §2.5.5 (with `dt_lrt = 0` documented) |
+| 4 | FID/TOI ground-truth match against `PARSED_TEST_VECTORS` table | this repo's encoding ground truth |
+| 5 | WN/ITOW byte-compare: bit-unpack `inputs/*_input.bin[0..21]` MSB-first, assert matches JSON | V1.0 Table 22 + transmit-side ground truth |
+| 6 | Per-subframe `_data_raw_hex` byte-equal to `inputs/*_input.bin` slice | transmit-side ground truth (catches any bit-position confusion in the parser) |
+| 7 | `_crc24q_ok` flag = `true` on every subframe | V1.0 §2.4.3.1.3 |
+
+```bash
+python validate.py check-parsed
+#   Parsed-JSON oracle:  7/7
+#
+# OK — all 7 parsed JSONs pass schema, spec-range, ToT round-trip,
+# FID/TOI/WN/ITOW ground-truth, raw-data byte-compare, and CRC checks.
+```
+
+**This is NOT a parser.**  There is no BCH(51,8) decoder, no LDPC, no
+bit-level CED extraction in `validate.py`.  The cheap CI gate just
+verifies that the JSON is internally self-consistent and consistent
+with the transmit-side ground truth in `inputs/`.
+
+## Oracle 2 — transitive cross-impl independence (via L4)
+
+Load-bearing parser independence on the V1.0-pinned fields (FID, TOI,
+WN, ITOW) comes from PocketSDR-AFS at L4 — not from a reimplementation
+in this repo:
+
+- PocketSDR-AFS `decode_AFSD_frame()` (`src/sdr_nav.c:2103`) extracts
+  `ch->week = getbitu(data, 0, 13)` and `itow = getbitu(data, 13, 9)`
+  from the deinterleaved SB2 bits, totally independently of LunaLink.
+- The L4 post-FEC oracle (`check-decode`, shipped at v0.4.0) verifies
+  PocketSDR-AFS's deinterleaved SB2/SB3/SB4 bits are byte-equal to
+  `inputs/*_input.bin` for all 10 signals (including FID=3 boundary
+  frames via the bundled SB1 FID-bypass).
+- The L5 oracle's check #6 verifies LunaLink's parsed JSON's
+  `_data_raw_hex` slices are byte-equal to the same `inputs/*_input.bin`
+  files.
+
+So: PocketSDR-AFS extracts (WN, ITOW) from the symbol stream → produces
+post-FEC bytes byte-equal to `inputs/`; LunaLink extracts (WN, ITOW)
+from the symbol stream → produces parsed JSON whose `_data_raw_hex`
+is byte-equal to `inputs/`.  Two independent receiver-side
+implementations produce identical SB2 byte slices, and their parsed
+WN/ITOW values are bit-unpacked from those bytes by both.  That is the
+spec's intended cross-impl claim at L5.
+
+PocketSDR-AFS is BSD-2-Clause, written in C against RTKLIB primitives,
+pinned at SHA `5b23809f30d68518b7fad7a564fd0fac57cc497d` —
+genuinely different codebase, language, and decoder family from
+LunaLink.
+
+## Coverage scope
+
+The interop doc's L5 *Test Cases* split across three concerns. v0.5.0
+covers TC1 + TC4 fully and disclaims the rest:
+
+| Test Case | Concern | v0.5.0 coverage |
+|:---|:---|:---|
+| **TC1** Public Test Messages 1–5 | parser bit-exactness on canonical inputs | ✅ exercised — `parsed_frame_message_1..5.json` |
+| **TC2** PRN sweep (1–12) | parser is content-agnostic on PRN | already covered transitively at L4 (PocketSDR-AFS decodes all 4 PRNs into byte-equal `inputs/` payloads); L5 parses from the same `frames/`, no new PRN ground in L5 |
+| **TC3** Message-type coverage in SB3/SB4 | semantic (almanac / ephemeris / corrections) | ❌ blocked by V1.0 — every MSG-G* / S* in §2.5 except G8 (ToT) is TBW; field-by-field parse requires V2.0 layouts.  L5 ships `_data_raw_hex` slices so consumers can byte-equal-compare without semantic field claims. |
+| **TC4** Boundary frame | PRN/FID/TOI + WN/ITOW at field maxima | ✅ exercised — `parsed_frame_boundary.json` (FID=3, TOI=99) and `parsed_frame_boundary_max_fields.json` (WN=8191, ITOW=503) |
+| **TC5** Error conditions / CRC detection | receiver-side robustness | ⚠️ partial — `_crc24q_ok` flag enforced on every shipped subframe; load-bearing CRC enforcement happens at L4 inside PocketSDR-AFS's `test_CRC()` (which gates the post-FEC dump's emission entirely).  An explicit fault-injection oracle was scoped out of this release. |
+
+**TC3 status.**  V1.0 §2.5.1–§2.5.22 declares 21 of 22 messages as TBW
+or "Not a LunaNet 1.0 item" placeholders — only MSG-G8 (ToT, §2.5.5)
+is fully specified.  No implementation can claim "all message type
+fields parsed correctly" until V2.0 pins the SF3/SF4 type-table
+layouts.  The L5 ship surfaces `subframe3.type` and `subframe4.type`
+as concrete values (using LunaLink's resolved 6-bit width per
+LSIS-TBC-2023/2024) so a third-party 4-bit implementation surfaces
+the disagreement at `diff-parsed` time, but the per-type semantic
+*data* is raw-slice only.
+
+**TC5 status.**  CRC enforcement happens at L4 inside the receiver:
+PocketSDR-AFS's `test_CRC()` is called gating the emission of every
+post-FEC byte (`-dump-fec` writes nothing if CRC fails).  At L5, the
+shipped JSONs all carry `_crc24q_ok: true` — verified by check #7.
+A direct fault-injection harness ("flip a SB2 byte, assert CRC
+catches") was scoped out: it would require either re-implementing
+CRC-24Q in `validate.py` (the parser-reimplementation smell we
+explicitly rejected for Oracle 1) or running PocketSDR-AFS with
+mutated input across many signal variants (large CI cost for marginal
+coverage gain over the existing transitive enforcement).
+
+## End-to-end verification recipe
+
+```bash
+# Cheap CI gate — runs in <1 s, no external deps.
+python validate.py check-parsed
+# Parsed-JSON oracle:  7/7
+# OK — all 7 parsed JSONs pass schema, spec-range, ToT round-trip,
+# FID/TOI/WN/ITOW ground-truth, raw-data byte-compare, and CRC checks.
+
+# User cross-validation (compare third-party parsed JSON to ours).
+python validate.py diff-parsed /path/to/your/parsed/
+
+# Full reproducibility chain — verify the bytes in inputs/ that the L5
+# JSONs cite by raw-slice byte-equality are themselves recovered by
+# PocketSDR-AFS from the L3 signals (the load-bearing cross-impl
+# claim on the V1.0-pinned fields).
+python references/pocketsdr-afs/harnesses/verify_pocketsdr_decode.py
+# Channel-symbol oracle: 10/10
+# Post-FEC oracle:       10/10
+```
+
+## Pass criterion summary
+
+- **JSON schema** matches interop-PDF §"Parsed Data Export Format"
+  (✅ 7/7 via check #1).
+- **FID extracted correctly** (interop-PDF L5 Pass Criteria) — ✅ 7/7
+  via check #4 against the encoding ground truth.
+- **TOI extracted correctly** — ✅ 7/7 via check #4.
+- **WN matches exactly** — ✅ 7/7 via check #5 against
+  `inputs/*_input.bin[0..12]` MSB-first; cross-impl independence via
+  L4's `decoded_fec_signal_*.bin` byte-equal to the same files.
+- **ITOW matches exactly** — ✅ 7/7 via check #5; `frame_message_2`
+  legitimately carries ITOW=511 (out of V1.0 spec range but within
+  9-bit raw field; surfaced faithfully).
+- **CED fields match exactly** — ⚠️ V1.0-blocked.  Raw bit-slice
+  byte-equality (check #6) is the achievable claim today.
+- **Time of Transmission calculated identically** — ✅ 7/7 via check
+  #3 against V1.0 §2.5.5.  Note: `frame_message_2`'s ToT formula
+  evaluates to a value derived from raw 9-bit ITOW=511 (mathematically
+  computable, conceptually invalid since 504..511 is V1.0-out-of-spec);
+  the JSON's `_time_of_transmission_dt_lrt_status: "tbd"` documents
+  the limitation.
+- **All message type fields parsed correctly** — ⚠️ partial.
+  `subframe3.type` and `subframe4.type` are emitted as concrete values
+  (LunaLink uses 6-bit width per LSIS-TBC-2023/2024); the per-type
+  semantic *data* is raw-slice only (V1.0-blocked).

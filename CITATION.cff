@@ -19,8 +19,8 @@ keywords:
   - ESA
   - test-vectors
   - interoperability
-version: "0.4.0"
-date-released: "2026-05-05"
+version: "0.5.0"
+date-released: "2026-05-06"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
@@ -28,7 +28,7 @@ abstract: >-
   Signal-In-Space Augmented Forward Signal) specification, Version 1.0
   (29 January 2025). Targets the five test levels defined in the
   competition interoperability plan, shipped incrementally as drops to
-  the same repository.  Version 0.4.0 covers Levels 1, 2, 3, and 4.
+  the same repository.  Version 0.5.0 covers Levels 1, 2, 3, 4, and 5.
   Level 1 ships all 210 PRN spreading codes — Gold (AFS-I primary),
   Weil 10230 (AFS-Q primary), Weil 1500 (tertiary) and the four AFS-Q
   secondary codes — in the standardized hex format, bit-exact against
@@ -47,6 +47,14 @@ abstract: >-
   every L3 signal and recovers the corresponding L2 frame's 6000-symbol
   payload byte-for-byte; the bundled cross-decode outputs are shipped
   alongside the verifier that regenerates them from upstream sources.
-  Apache-2.0 source for the LANS-AFS-SIM and PocketSDR-AFS verification
-  harnesses ships alongside for end-to-end reproducibility.  Subsequent
-  drops will add Level 5.
+  Level 5 ships seven parsed JSONs in the interop-PDF "Parsed Data
+  Export Format" shape, produced by the LunaLink reference implementation
+  running its full RX path (sync → BCH → LDPC → CRC → parse) on each L2
+  frame.  V1.0-pinned fields (FID, TOI per Tables 13/14; WN, ITOW per
+  Table 22; ToT formula per §2.5.5; CRC-24Q per §2.4.3.1.3) are emitted
+  as concrete values; V1.0-TBW regions (CED, Health, Time Conversions,
+  SF3/SF4 data) are surfaced as raw bit-slices with explicit LSIS-TBW
+  markers, so consumers can byte-equal-compare without inventing
+  positions V1.0 doesn't pin.  Apache-2.0 source for the LANS-AFS-SIM
+  and PocketSDR-AFS verification harnesses ships alongside for
+  end-to-end reproducibility.
