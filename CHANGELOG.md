@@ -13,14 +13,118 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 | 0.1.0     | Level 1 |
 | 0.2.0     | + Level 2 |
 | 0.2.1     | + canonical pre-encode inputs |
-| **0.2.2** | + Level-2 boundary frame with WN=8191 / ITOW=503 maxima (this release) |
-| 0.3.0     | + Level 3 |
+| 0.2.2     | + Level-2 boundary frame with WN=8191 / ITOW=503 maxima |
+| **0.3.0** | + Level 3 (this release) |
 | 0.4.0     | + Level 4 |
 | 0.5.0     | + Level 5 (feature-complete) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
+
+## [0.3.0] — 2026-05-04
+
+Third public release — **Level 3: Signal Generation Interoperability**
+vectors.  Builds on v0.2.2's L2 boundary-max-fields frame to also cover
+TC4's WN/ITOW maxima at the signal level.
+
+### Added
+- `signals/` — 10 baseband I/Q signal vectors in the binary format defined by
+  `interoperability.pdf` (128-byte `LSISIQ\0\0` header + interleaved float32
+  I/Q at 10.23 MHz × 12 s, BPSK ±1.0). Files chosen to cover the L3 spec
+  test cases:
+  - `signal_message_1_12s.iq.gz` — PRN 1, all-zeros (**TC1 verbatim** +
+    TC2 first endpoint + TC4 all-zeros minimum)
+  - `signal_message_2_12s.iq.gz` — PRN 1, all-ones (bonus content variation)
+  - `signal_message_3_12s.iq.gz` — PRN 1, alternating bits (bonus)
+  - `signal_message_4_12s.iq.gz` — PRN 1, bytewise marker (bonus, surrogate)
+  - `signal_message_5_12s.iq.gz` — PRN 1, xorshift32 (bonus)
+  - `signal_prn2_baseline_12s.iq.gz` — PRN 2, TM1 (**TC2 — AFS-Q secondary
+    index S1**)
+  - `signal_prn3_baseline_12s.iq.gz` — PRN 3, TM1 (**TC2 — AFS-Q secondary
+    index S2**)
+  - `signal_prn12_baseline_12s.iq.gz` — PRN 12, TM1 (**TC2 — AFS-Q secondary
+    index S3** + high end of legal interim PRN range)
+  - `signal_boundary_at_prn12_12s.iq.gz` — PRN 12, `frame_boundary.bin`
+    nav data (**TC4 — FID=3 / TOI=99 maxima** at PRN 12; PRN 210 is not
+    signal-realisable so we substitute PRN 12)
+  - `signal_boundary_max_fields_at_prn12_12s.iq.gz` — PRN 12,
+    `frame_boundary_max_fields.bin` nav data (**TC4 — WN=8191 /
+    ITOW=503 maxima** at PRN 12).  Pairs with the v0.2.2 L2 frame to
+    propagate the SB2-field maxima coverage through to L3.
+
+  The four PRN baselines (1, 2, 3, 12) together exercise all four AFS-Q
+  secondary codes S0–S3 per LSIS V1.0 §4.4.2 / Annex 3 Table 2. A
+  generator that is correct on PRN 1 (S0) but mishandles the
+  secondary-index assignment for S1, S2, or S3 fails at L3 instead of
+  leaking into L4.
+
+  Each file is **982 080 128 bytes raw** (128 header + 122 760 000 sample
+  pairs × 8 bytes), **~22 MB after `gzip -9`**. Total `signals/` footprint:
+  ~221 MB. Repository grows from ~11 MB to ~232 MB; consumers who only need
+  L1/L2 can skip `signals/` via sparse-checkout or a shallow clone.
+
+  **PRN 210 itself remains unrealisable at L3.** Annex 3 Table 11 publishes
+  the AFS-Q matched-code phase assignment for PRN 1–12 only; PRN 13–210
+  are reserved for the future LunaNet operational deployment.  The interop
+  doc's Test Case 2 mirrors this scope ("PRN: 1-12 (Table 11)").  L1
+  (`codes/codes_prn210.hex`) and L2 (`frames/frame_boundary*.bin`) remain
+  shipped at PRN=210 — those layers are content-agnostic at the PRN level
+  and the Annex 3 reference covers all 210 PRNs.
+
+- `validate.py` gained two subcommands:
+  - `check-signals` — L3 structural + first-chip polarity oracle.
+    Verifies header layout (magic, version, sample rate, duration, PRN,
+    format string, reserved bytes), file size, strict ±1.0 BPSK across
+    every sample, and first-chip I- and Q-channel polarity at samples
+    0, 10, 20, 30 within the sync-prefix region **and** at sample
+    2 455 200 (start of frame symbol 120, the first message-distinguishing
+    interleaver-output symbol — catches LDPC / interleaver bit-ordering
+    errors that the sync-prefix probe alone cannot). Cross-validated
+    against the L1 codes (Gold/Weil/Tertiary chips from `codes/`) and the
+    L2 sync prefix (FAQ Q17 / spec Table 12).
+  - `diff-signals` — compare your `signal_*_12s.iq[.gz]` files to ours
+    byte-for-byte, with first-mismatch localised to either a header byte
+    or `(sample, channel)`.
+- Manifest grew to **675 SHA256-hashed content files** (was 665 in v0.2.2).
+- `pyproject.toml` packaging includes `signals/` in wheel + sdist;
+  version bumped to **0.3.0**; numpy added as optional dep (`[fast]` extra)
+  for the bulk-sample range scan.
+- `.github/workflows/verify.yml` runs `check-signals` on every push.
+- `tests/test_validate.py` — 59 cases (was 48 in v0.2.2); 11 new cases
+  cover the new subcommands, header / sample-range / polarity mutations,
+  gzip handling, and manifest coverage of `signals/`.
+
+### Correctness
+- **Oracle 1 — Structural + first-chip polarity** (L3 normative-equivalent
+  + cross-chained with L1/L2 oracles): 10/10 signals pass `check-signals`.
+  This is materially weaker than L1 (Annex 3 + LANS-AFS-SIM) and L2
+  (structural + LANS-AFS-SIM): v0.3.0 ships **one** formal oracle. See
+  `CORRECTNESS.md` Level 3 chapter for the full disclosure and the
+  receive-side closure deferred to v0.4.0.
+
+### Why no L3 second oracle in this release
+- **LANS-AFS-SIM** is not the right shape for L3: its `afs_sim` produces a
+  multi-satellite IF-style dump (sums all visible SVs, applies Doppler +
+  path-loss + carrier rotation, writes int16 / 2-bit, no LSISIQ header,
+  drives nav data from its internal almanac with no flag for external
+  frame injection). Coercing it to clean single-PRN baseband requires
+  forking the inner sample loop, which breaks the "thin caller invoking
+  unchanged routines" chain-of-trust we relied on at L1/L2.
+- **PocketSDR-AFS** is a receiver, not a generator — it can only *consume*
+  signals, not produce reference signals to byte-compare. Receive-side
+  closure (decode our L3 signal → recovered frame ≡ shipped L2 frame) is
+  the natural shape for the L3 Pass Criteria the interop doc actually
+  specifies, and lands formally in v0.4.0 alongside the L4 deliverable.
+- **No other open-source AFS generator exists** in May 2026. LSIS V1.0
+  (January 2025) is too new for a third independent implementation.
+
+Signal content in v0.3.0 is **trust-by-construction**: each signal is a
+deterministic function of the matching `frames/frame_*.bin` (already L2
+oracle-verified) and `codes/codes_prn{N}.hex` (already L1 oracle-verified)
+under the LSIS V1.0 §4 BPSK + I/Q-multiplex math. The first-chip polarity
+check chains those L1 + L2 verifications through into L3 without
+re-implementing the full pipeline.
 
 ## [0.2.2] — 2026-05-04
 

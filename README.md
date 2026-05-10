@@ -15,16 +15,17 @@ transmit / receive chain.
 |:-----:|:---|:---|:---:|
 | **1** | Spreading-code generation                              | LNIS Vol A Annex 3 + LANS-AFS-SIM            | ✅ shipped in `v0.1.0` |
 | **2** | Encoded-frame generation (BCH + CRC-24 + LDPC + interleaving) | LSIS V1.0 §2.4 structural + LANS-AFS-SIM | ✅ shipped in `v0.2.0` |
-| **3** | Baseband I/Q signal generation                         | main spec §4 + LANS-AFS-SIM                  | planned |
-| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)            | planned |
+| **3** | Baseband I/Q signal generation                         | LSIS V1.0 §4 structural + first-chip polarity (chains L1+L2) | ✅ shipped in `v0.3.0` (single oracle, see below) |
+| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)            | planned (closes L3 receive-side too) |
 | **5** | Navigation-data parsing from decoded frames            | main spec §5–6 + PocketSDR-AFS parser        | planned |
 
-L1–L3 oracles sit on the transmit side and are externally verified using [LANS-AFS-SIM](https://github.com/osqzss/LANS-AFS-SIM) alongside the normative references from LSIS-AFS v1.0. 
+L1–L2 oracles sit on the transmit side and are externally verified using [LANS-AFS-SIM](https://github.com/osqzss/LANS-AFS-SIM) alongside the normative references from LSIS-AFS v1.0.
+L3 sits on the transmit side too but currently has only one formal oracle (structural + first-chip polarity, chaining L1 codes and L2 sync prefix); LANS-AFS-SIM is not the right shape for L3 (multi-PRN sum, internal-almanac nav data, carrier+Doppler applied) and no second open-source AFS generator exists yet. Receive-side closure for L3 ("decode our signal → frame ≡ shipped L2 frame") is the natural shape for the spec's L3 Pass Criteria and lands with v0.4.0.
 L4–L5 sit on the receive side and are covered by [PocketSDR-AFS](https://github.com/osqzss/PocketSDR-AFS) —
 Ebinuma's companion software-defined receiver. Both tools are BSD-2-Clause
 and redistributable as derived outputs the same way [Annex 3](references/annex-3/) and the
 LANS-AFS-SIM chip dumps are bundled today. The PocketSDR-AFS integration
-will be exercised ahead of the June workshop so that L4/L5 evidence is demonstrated before the in-person hackathon.
+will be exercised ahead of the June workshop so that L3 closure plus L4/L5 evidence is demonstrated before the in-person hackathon.
 
 Each level drops its content into its own sibling directory (`codes/`,
 `frames/`, `signals/`, `parsed/`) and its oracle(s) into `references/`.
@@ -40,7 +41,7 @@ lsis-afs-test-vectors/
 ├── codes/                           # Level 1 — 210 × codes_prnNNN.hex      ✅ shipped
 ├── frames/                          # Level 2 — 6 × frame_*.bin              ✅ shipped
 ├── inputs/                          # Level 2 — 6 × frame_*_input.bin (canonical pre-encode bytes) ✅ shipped
-├── signals/                         # Level 3 — I/Q signal files                  (planned)
+├── signals/                         # Level 3 — 10 × signal_*_12s.iq.gz      ✅ shipped (~221 MB total)
 │                                    # Level 4 — no content dir; see references/pocketsdr-afs/
 ├── parsed/                          # Level 5 — parsed navigation JSON            (planned)
 ├── references/                      # bundled oracles, grows with future levels
@@ -48,10 +49,10 @@ lsis-afs-test-vectors/
 │   ├── lans-afs-sim/                #   transmit-side oracle (BSD-2-Clause, © Ebinuma)
 │   │   ├── codes/                   #     L1 chip dumps — 420 × .bin        ✅ shipped
 │   │   ├── frames/                  #     L2 frame dumps — 6 × .bin         ✅ shipped
-│   │   ├── signals/                 #     L3 (planned)
 │   │   ├── harnesses/               #     Apache-2.0 source for the dump tools
 │   │   ├── LICENSE.txt
 │   │   └── README.md
+│   │   # No signals/ — LANS-AFS-SIM doesn't fit L3 (see CORRECTNESS.md).
 │   ├── pocketsdr-afs/               #   receive-side oracle                       (planned)
 │   │   ├── decode/                  #     L4 cross-decode reference
 │   │   └── parsed/                  #     L5 parsed-JSON reference
@@ -87,7 +88,7 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.2.2` (Levels 1 + 2 + canonical inputs + boundary-max-fields patch)
+## Current release — `v0.3.0` (Levels 1 + 2 + 3)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
@@ -160,6 +161,72 @@ python validate.py diff-frames /path/to/your/frames/
 # Bit-exact agreement isolates correctness to the FEC pipeline alone.
 ```
 
+### Level 3 — baseband I/Q signals (10 signals, ~221 MB compressed)
+
+Ten `signals/signal_*_12s.iq.gz` files in the binary LSISIQ format
+defined by `interoperability.pdf` (128-byte `LSISIQ\0\0` header +
+interleaved float32 I/Q at 10.23 MHz × 12 s, BPSK ±1.0). Each file is
+**982 080 128 bytes raw**, **~22 MB after `gzip -9`**:
+
+| File | PRN | Source frame | Spec mapping |
+|:---|:---:|:---|:---|
+| `signal_message_1_12s.iq.gz` |   1 | `frame_message_1.bin` (all-zeros) | **TC1 verbatim** + TC2 first endpoint + TC4 all-zeros minimum |
+| `signal_message_2_12s.iq.gz` |   1 | `frame_message_2.bin` (all-ones) | bonus content variation (interleaver-error debugging) |
+| `signal_message_3_12s.iq.gz` |   1 | `frame_message_3.bin` (alternating) | bonus content variation |
+| `signal_message_4_12s.iq.gz` |   1 | `frame_message_4.bin` (marker surrogate) | bonus content variation |
+| `signal_message_5_12s.iq.gz` |   1 | `frame_message_5.bin` (xorshift32) | bonus content variation |
+| `signal_prn2_baseline_12s.iq.gz` |   2 | `frame_message_1.bin` (all-zeros) | **TC2 — secondary index S1** |
+| `signal_prn3_baseline_12s.iq.gz` |   3 | `frame_message_1.bin` (all-zeros) | **TC2 — secondary index S2** |
+| `signal_prn12_baseline_12s.iq.gz` |  12 | `frame_message_1.bin` (all-zeros) | **TC2 — secondary index S3** + high end of legal interim PRN range |
+| `signal_boundary_at_prn12_12s.iq.gz` |  12 | `frame_boundary.bin` (BCH SB1: FID=3, TOI=99) | **TC4 — TOI=99 / FID=3 maxima** at PRN 12 |
+| `signal_boundary_max_fields_at_prn12_12s.iq.gz` |  12 | `frame_boundary_max_fields.bin` (SB2 with WN=8191, ITOW=503) | **TC4 — WN=8191 / ITOW=503 maxima** at PRN 12 (uses v0.2.2 boundary-max-fields frame) |
+
+The four PRN-baseline files (PRN 1, 2, 3, 12) together exercise all four
+AFS-Q secondary codes (S0–S3) per LSIS V1.0 §4.4.2 — a generator that is
+correct at PRN 1 but mishandles the secondary-index assignment table for
+S1/S2/S3 fails at L3 instead of leaking into L4.
+
+**TC2 not fully exercised**: PRN 4–11 mid-range are not shipped. The 4
+shipped PRNs cover all 4 secondary indices, which is the dimension that
+actually distinguishes L3 generators in practice; full PRN 1–12 sweep
+adds 8 more files (~176 MB) with limited extra coverage.
+
+**TC4 fully exercised at L3 (except PRN=210)**: FID=3 / TOI=99 maxima
+via `signal_boundary_at_prn12`, WN=8191 / ITOW=503 maxima via
+`signal_boundary_max_fields_at_prn12` (which uses the v0.2.2
+boundary-max-fields L2 frame), all-zeros minimum via `signal_message_1`.
+PRN=210 itself is not signal-realisable; everything else from the TC4
+input list is propagated through to L3.
+
+**No PRN=210 L3 entry**: PRN 13–210 are reserved for the future LunaNet
+operational deployment and have no defined matched-code assignment yet,
+and the interop doc's Test Case 2 itself scopes L3 PRN coverage to
+"PRN: 1-12 (Table 11)" for that reason.
+
+**TC3 (message-type coverage) not exercised at L3**: TC3 is about SF3 /
+SF4 *semantic* message types, not bit-pattern variations. L3 ships
+content patterns; TC3 lands formally with the L5 parser drop.
+
+**One oracle, not two — and it covers only three of the four L3 Pass
+Criteria.** v0.3.0 demonstrates *identical chip rates*, *identical
+symbol rates*, and *identical code synchronisation* via the structural
++ first-chip + symbol-120 polarity check (`check-signals`). The fourth
+Pass Criterion the interop doc names — *cross-decoding recovers
+original data with BER < 10⁻ⁿ* — is receive-side and lands formally in
+v0.4.0 with PocketSDR-AFS bundling. See
+[`CORRECTNESS.md`](./CORRECTNESS.md) §"Level 3 — I/Q Signals" for the
+full disclosure.
+
+**Repository size.** `signals/` adds ~221 MB. If you only need L1/L2,
+sparse-checkout to skip:
+
+```bash
+git clone --filter=blob:none https://github.com/luar-space/lsis-afs-test-vectors
+cd lsis-afs-test-vectors
+git sparse-checkout init --cone
+git sparse-checkout set codes frames inputs references validate.py manifest.json
+```
+
 ### Validator subcommands
 
 ```bash
@@ -178,10 +245,14 @@ python validate.py check-lans-afs-sim-frames
 # Level 2 — verify canonical-input files reproduce from the documented patterns.
 python validate.py check-canonical-inputs
 
+# Level 3 — structural + first-chip polarity oracle (chains L1 codes + L2 sync prefix).
+python validate.py check-signals
+
 # Compare your implementation's output against this repo.
 python validate.py diff         /path/to/your/codes/
 python validate.py diff-frames  /path/to/your/frames/
 python validate.py diff-inputs  /path/to/your/inputs/
+python validate.py diff-signals /path/to/your/signals/
 
 # Re-hash everything to confirm the distribution is intact.
 python validate.py verify-manifest
@@ -189,19 +260,26 @@ python validate.py verify-manifest
 
 ### Correctness
 
-Three independent oracles ship with this release, all reproducible offline:
+Four oracles ship with this release, all reproducible offline:
 
 1. **LNIS AD1 Volume A, Annex 3** (L1 normative) — every `.hex` file matches
    byte-for-byte; `check-annex3` reports 630/630.
 2. **LANS-AFS-SIM** (BSD-licensed community reference by Takuji Ebinuma) —
    chip dumps and frame dumps bundled in `references/lans-afs-sim/`;
    `check-lans-afs-sim` reports 420/420 and `check-lans-afs-sim-frames`
-   reports 6/6.
+   reports 7/7.
 3. **LSIS V1.0 §2.4 structural rules** (L2) — sync pattern bit-exact match
    to `0xCC63F74536F49E04A`, header magic / version / frame-length /
-   PRN integrity, symbol-domain values in {0, 1}; `check-frames` reports 6/6.
+   PRN integrity, symbol-domain values in {0, 1}; `check-frames` reports 7/7.
+4. **L3 structural + first-chip polarity** (v0.3.0) — LSISIQ header layout
+   per the interop doc, file-size invariant, strict ±1.0 BPSK across every
+   sample, and first-chip polarity cross-validated against the L1 codes
+   and the L2 sync prefix; `check-signals` reports 10/10. **L3 ships a single
+   formal oracle**; receive-side closure (decode our signal back to the
+   original L2 frame) waits for v0.4.0's PocketSDR-AFS bundling — see
+   [`CORRECTNESS.md`](./CORRECTNESS.md) §"Level 3 — I/Q Signals".
 
-All four checks run in CI on every push, alongside `ruff check`, `ruff
+All five checks run in CI on every push, alongside `ruff check`, `ruff
 format --check`, `pytest`, and `verify-manifest`. See
 [`CORRECTNESS.md`](./CORRECTNESS.md) for the oracle-coverage table, the
 encoding rules they validate, and the disclosed normalisations applied to

@@ -1,4 +1,4 @@
-"""LSIS-AFS interoperability test-vector validator (Levels 1–2).
+"""LSIS-AFS interoperability test-vector validator (Levels 1–3).
 
 Subcommands
 -----------
@@ -23,11 +23,22 @@ check-lans-afs-sim-frames
     against the corresponding ``references/lans-afs-sim/frames/lans_frame_*.bin``.
     L2 second oracle.
 
+check-signals
+    Validate every ``signals/signal_*_12s.iq.gz`` structurally per the interop
+    document's Signal Export Format (LSISIQ\\0\\0 magic + 128-byte header +
+    interleaved float32 I/Q at 10.23 MHz × 12 s) and chain L1+L2 oracles into
+    L3 by checking the first-chip I- and Q-channel polarity against the
+    Annex-3-verified Gold/Weil/Tertiary chips and the FAQ-Q17-pinned sync
+    prefix.  L3 structural + first-chip polarity oracle.
+
 diff
     Compare a directory of code vectors (codes_prnNNN.hex) against ours.
 
 diff-frames
     Compare a directory of frame vectors (frame_*.bin) against ours.
+
+diff-signals
+    Compare a directory of L3 signal vectors (signal_*_12s.iq[.gz]) against ours.
 
 check-canonical-inputs
     Verify the canonical pre-encode input files in ``inputs/`` reproduce
@@ -45,7 +56,7 @@ verify-manifest
 
 rebuild-manifest
     Regenerate ``manifest.json`` from the contents of ``codes/``, ``frames/``,
-    and ``references/``.  Maintainer command.
+    ``inputs/``, ``signals/``, and ``references/``.  Maintainer command.
 
 refresh
     Download Annex 3 reference files from a user-supplied URL and re-hash.
@@ -56,16 +67,30 @@ Stdlib-only — no third-party dependencies required to run this tool.
 from __future__ import annotations
 
 import argparse
+import array
+import gzip
 import hashlib
 import json
 import re
+import struct
 import sys
 import urllib.request
 from pathlib import Path
 
+# Optional speedup for the L3 full-range scan: numpy reads a 982 MB float32
+# payload as a uint32 view in microseconds (zero-copy) and runs a vectorised
+# set-membership check ~12× faster than bytes.count.  The validator is
+# stdlib-only by design — if numpy is not installed we fall back to the
+# slower path.  Both paths are functionally equivalent.
+try:
+    import numpy as _np
+except ImportError:  # pragma: no cover - exercised only on stdlib-only installs
+    _np = None
+
 REPO_ROOT = Path(__file__).resolve().parent
 CODES_DIR = REPO_ROOT / "codes"
 FRAMES_DIR = REPO_ROOT / "frames"
+SIGNALS_DIR = REPO_ROOT / "signals"
 REFERENCES_DIR = REPO_ROOT / "references"
 ANNEX3_DIR = REFERENCES_DIR / "annex-3"
 LANS_DIR = REFERENCES_DIR / "lans-afs-sim"
@@ -801,6 +826,455 @@ def cmd_build_canonical_inputs(_args: argparse.Namespace | None = None) -> int:
     return 0
 
 
+# ─────────────────────────────── Level 3 constants ─────────────────────────
+#
+# Per references/interoperability.pdf, Signal Export Format:
+#   Header (128 bytes):
+#     Magic:       "LSISIQ\0\0" (8 bytes)
+#     Version:     uint32 LE = 1 (4 bytes)
+#     Sample rate: float64 LE  (8 bytes)
+#     Duration:    float64 LE seconds (8 bytes)
+#     PRN:         uint32 LE  (4 bytes)
+#     Format:      "float32" zero-padded to 16 bytes
+#     Reserved:    80 zero bytes
+#   Data: float32 I/Q interleaved [I0, Q0, I1, Q1, …]
+#
+# Spec baseline (LSIS V1.0 §4): sample_rate = 10.23 MHz, duration = 12 s.
+# Total file size = 128 + 12 × 10 230 000 × 2 × 4 = 982 080 128 bytes.
+
+SIGNAL_MAGIC = b"LSISIQ\x00\x00"
+SIGNAL_VERSION = 1
+SIGNAL_HEADER_LEN = 128
+SIGNAL_SAMPLE_RATE = 10_230_000.0
+SIGNAL_DURATION_S = 12.0
+SIGNAL_FORMAT = b"float32"  # padded with NULs to 16 bytes in the header
+SIGNAL_FORMAT_FIELD_LEN = 16
+SIGNAL_FORMAT_OFFSET = 32  # bytes 32:48
+SIGNAL_RESERVED_OFFSET = 48
+SIGNAL_RESERVED_LEN = 80
+SIGNAL_BYTES_PER_SAMPLE_PAIR = 8  # float32 × 2 (I+Q)
+SIGNAL_TOTAL_FILE_LEN = (
+    SIGNAL_HEADER_LEN + int(SIGNAL_SAMPLE_RATE * SIGNAL_DURATION_S) * SIGNAL_BYTES_PER_SAMPLE_PAIR
+)
+
+# I-channel chip rate is 1.023 Mchip/s (LSIS V1.0 §4); at 10.23 MHz sample rate,
+# each I-chip spans 10 consecutive samples by nearest-neighbour upsampling.
+SIGNAL_I_SAMPLES_PER_CHIP = 10
+# Q-channel chip rate is 5.115 Mchip/s; each Q-chip spans 2 samples.
+SIGNAL_Q_SAMPLES_PER_CHIP = 2
+
+# (filename, expected_prn).  The 6 entries map 1:1 to FRAME_TEST_VECTORS — each
+# signal is generated from the matching L2 frame (same PRN, same nav data).
+#
+# Each entry is (signal_filename, expected_prn, source_frame_filename).  The
+# 5 standard Test Messages (TM1–TM5) all use PRN 1; the additional
+# ``signal_prn12_baseline_12s.iq.gz`` covers TC2's "high end of the legal
+# PRN range" using the same nav data as TM1 (frame_message_1.bin) modulated
+# at PRN 12 — the largest PRN with a defined AFS-Q matched-code phase
+# assignment per LSIS V1.0 Annex 3 Table 11.
+#
+# The L2 ``frame_boundary.bin`` (PRN=210) has no L3 counterpart.  PRN 13–210
+# are reserved for the future LunaNet operational deployment and have no
+# defined matched-code assignment yet, so the interop doc's Test Case 2
+# itself scopes L3 PRN coverage to "PRN: 1-12 (Table 11)".
+SIGNAL_TEST_VECTORS: list[tuple[str, int, str]] = [
+    ("signal_message_1_12s.iq.gz", 1, "frame_message_1.bin"),
+    ("signal_message_2_12s.iq.gz", 1, "frame_message_2.bin"),
+    ("signal_message_3_12s.iq.gz", 1, "frame_message_3.bin"),
+    ("signal_message_4_12s.iq.gz", 1, "frame_message_4.bin"),
+    ("signal_message_5_12s.iq.gz", 1, "frame_message_5.bin"),
+    # Mid-range PRNs covering the two AFS-Q secondary indices not exercised
+    # by PRN 1 (S0) or PRN 12 (S3): PRN 2 → S1, PRN 3 → S2.  Together with
+    # PRN 1 and PRN 12, all four secondary codes from LSIS V1.0 §4.4.2 are
+    # exercised at L3.
+    ("signal_prn2_baseline_12s.iq.gz", 2, "frame_message_1.bin"),
+    ("signal_prn3_baseline_12s.iq.gz", 3, "frame_message_1.bin"),
+    ("signal_prn12_baseline_12s.iq.gz", 12, "frame_message_1.bin"),
+    # TC4 boundary frame (FID=3, TOI=99) modulated at PRN 12 — exercises
+    # the max-BCH-SB1-codeword corner of the spec at L3.  The L2
+    # ``frame_boundary.bin`` itself uses PRN=210 (no defined matched-code
+    # phase), so we substitute PRN 12 — the highest legal interim PRN —
+    # while keeping the boundary FID/TOI bits in SB1 and the
+    # alternating-start-with-0 pattern in SB2/SB3/SB4.  A clean L4
+    # cross-decode of this signal at PRN 12 must recover the SB1 BCH
+    # codeword for (FID=3, TOI=99), proving the encoder's behaviour at
+    # field maxima end-to-end.
+    ("signal_boundary_at_prn12_12s.iq.gz", 12, "frame_boundary.bin"),
+    # TC4 SB2-field maxima (WN=8191 in SB2[0..12], ITOW=503 in SB2[13..21])
+    # modulated at PRN 12.  Pairs with the v0.2.2
+    # ``frame_boundary_max_fields.bin`` to propagate the SB2-field maxima
+    # coverage through to L3.  A clean L4 cross-decode must recover those
+    # maxima alongside the FID=3 / TOI=99 from BCH SB1.
+    ("signal_boundary_max_fields_at_prn12_12s.iq.gz", 12, "frame_boundary_max_fields.bin"),
+]
+
+
+def _read_signal_bytes(path: Path) -> bytes:
+    """Read a possibly-gzipped signal file into memory (gunzipped if .gz)."""
+    if path.suffix == ".gz":
+        with gzip.open(path, "rb") as f:
+            return f.read()
+    return path.read_bytes()
+
+
+def _parse_iq_header(data: bytes, source: str) -> tuple[dict[str, object], list[str]]:
+    """Parse the 128-byte LSISIQ header. Returns (fields, errors)."""
+    errors: list[str] = []
+    if len(data) < SIGNAL_HEADER_LEN:
+        errors.append(f"{source}: file shorter than 128-byte header")
+        return {}, errors
+
+    magic = data[0:8]
+    version = int.from_bytes(data[8:12], "little")
+    sample_rate = struct.unpack("<d", data[12:20])[0]
+    duration = struct.unpack("<d", data[20:28])[0]
+    prn = int.from_bytes(data[28:32], "little")
+    fmt_field = data[SIGNAL_FORMAT_OFFSET : SIGNAL_FORMAT_OFFSET + SIGNAL_FORMAT_FIELD_LEN]
+    reserved = data[SIGNAL_RESERVED_OFFSET : SIGNAL_RESERVED_OFFSET + SIGNAL_RESERVED_LEN]
+
+    fields: dict[str, object] = {
+        "magic": magic,
+        "version": version,
+        "sample_rate": sample_rate,
+        "duration": duration,
+        "prn": prn,
+        "format": fmt_field,
+        "reserved": reserved,
+    }
+
+    if magic != SIGNAL_MAGIC:
+        errors.append(f"{source}: magic={magic!r}, expected {SIGNAL_MAGIC!r}")
+    if version != SIGNAL_VERSION:
+        errors.append(f"{source}: version={version}, expected {SIGNAL_VERSION}")
+    if sample_rate != SIGNAL_SAMPLE_RATE:
+        errors.append(f"{source}: sample_rate={sample_rate!r}, expected {SIGNAL_SAMPLE_RATE!r}")
+    if duration != SIGNAL_DURATION_S:
+        errors.append(f"{source}: duration={duration!r}, expected {SIGNAL_DURATION_S!r}")
+    # Format field must start with b"float32" and the remaining bytes must be NUL.
+    expected_fmt = SIGNAL_FORMAT + b"\x00" * (SIGNAL_FORMAT_FIELD_LEN - len(SIGNAL_FORMAT))
+    if fmt_field != expected_fmt:
+        errors.append(f"{source}: format field={fmt_field!r}, expected {expected_fmt!r}")
+    if reserved != b"\x00" * SIGNAL_RESERVED_LEN:
+        errors.append(f"{source}: reserved bytes are not all zero")
+    return fields, errors
+
+
+def _decode_chip_bits(hex_str: str, prepend_zeros: int, chip_count: int) -> list[int]:
+    """Decode the Annex-3-style hex string back to a list of {0,1} chips.
+
+    Identical algorithm to ``_hex_to_chips`` but returns a list-of-int (avoids
+    re-allocation for callers that only need the first few chips).
+    """
+    bit_str = "".join(f"{int(c, 16):04b}" for c in hex_str)
+    expected = chip_count + prepend_zeros
+    if len(bit_str) != expected:
+        msg = f"hex decodes to {len(bit_str)} bits, expected {expected}"
+        raise ValueError(msg)
+    return [int(b) for b in bit_str[prepend_zeros:]]
+
+
+def _gold_chips_for_prn(prn: int, n: int) -> list[int]:
+    """Return the first n Gold-code chips for a PRN (from codes/codes_prnNNN.hex)."""
+    sections = parse_codes_hex(CODES_DIR / f"codes_prn{prn:03d}.hex")
+    return _decode_chip_bits(sections["GOLD_CODE"], prepend_zeros=2, chip_count=2046)[:n]
+
+
+def _weil_primary_chip_0(prn: int) -> int:
+    """Return the first chip of the AFS-Q Weil-10230 primary code for a PRN."""
+    sections = parse_codes_hex(CODES_DIR / f"codes_prn{prn:03d}.hex")
+    return _decode_chip_bits(sections["WEIL_PRIMARY"], prepend_zeros=2, chip_count=10230)[0]
+
+
+def _weil_tertiary_chip_0(prn: int) -> int:
+    """Return the first chip of the AFS-Q Weil-1500 tertiary code for a PRN."""
+    sections = parse_codes_hex(CODES_DIR / f"codes_prn{prn:03d}.hex")
+    return _decode_chip_bits(sections["WEIL_TERTIARY"], prepend_zeros=0, chip_count=1500)[0]
+
+
+def _secondary_chip_0(prn: int) -> int:
+    """Return the first chip of the AFS-Q secondary code assigned to a PRN.
+
+    Per LSIS V1.0 §4.4.2 / Annex 3 Table 2: PRN-to-secondary index assignment
+    is k = (prn − 1) mod 4 (linear for PRN 1–4, periodic for higher PRNs).
+    Each secondary code is 4 chips, MSB-first in the single-nibble hex value.
+    """
+    sec_idx = (prn - 1) % 4
+    sections = parse_codes_hex(CODES_DIR / f"codes_prn{prn:03d}.hex")
+    sec_hex = sections[f"SECONDARY_S{sec_idx}"]  # one hex digit
+    sec_bits = _decode_chip_bits(sec_hex, prepend_zeros=0, chip_count=4)
+    return sec_bits[0]
+
+
+def _frame_symbol(filename: str, symbol_idx: int) -> int:
+    """Return frame symbol ``symbol_idx`` (0..5999) of a shipped frame file."""
+    data = (FRAMES_DIR / filename).read_bytes()
+    assert len(data) == FRAME_FILE_LEN
+    return data[FRAME_HEADER_LEN + symbol_idx]
+
+
+# I-channel sample rate / symbol rate = 10.23 MHz / 500 sym/s = 20460 samples/symbol.
+SIGNAL_I_SAMPLES_PER_SYMBOL = 20460
+
+# First frame symbol that distinguishes the 5 standard test messages: symbols
+# 0..67 are the spec sync prefix (identical across all frames) and 68..119 are
+# BCH(51,8) of (FID=0, TOI=0) (identical across all 5 message frames since
+# they share FID/TOI).  Symbol 120 is the first interleaved SB2/SB3/SB4 LDPC
+# symbol — it differs across the 5 messages.  Probing the polarity at the
+# start of symbol 120 catches interleaver / LDPC bit-ordering errors that the
+# sync-prefix probe at sample 0 cannot.
+SIGNAL_DISTINGUISHING_SYMBOL_IDX = 120
+
+
+def _expected_i_sample(frame_sym: int, gold_chip: int) -> float:
+    """BPSK polarity: I = (1 − 2·sym) · (1 − 2·chip) per FAQ Q19."""
+    return float((1 - 2 * frame_sym) * (1 - 2 * gold_chip))
+
+
+def _expected_q_sample(weil_chip: int, tert_chip: int, sec_chip: int) -> float:
+    """Q-channel BPSK polarity: matched code = Weil ⊕ Tert ⊕ Sec, mapped per FAQ Q19."""
+    return float((1 - 2 * weil_chip) * (1 - 2 * tert_chip) * (1 - 2 * sec_chip))
+
+
+def _read_iq_pair(data: bytes, sample_idx: int) -> tuple[float, float]:
+    """Read one (I, Q) pair from the float32 payload of a parsed signal blob."""
+    offset = SIGNAL_HEADER_LEN + sample_idx * SIGNAL_BYTES_PER_SAMPLE_PAIR
+    i_val, q_val = struct.unpack("<ff", data[offset : offset + 8])
+    return i_val, q_val
+
+
+def _check_signal_payload(data: bytes, prn: int, frame_filename: str, source: str) -> list[str]:
+    """Validate sample-domain rules: range, file size, first-chip polarity."""
+    errors: list[str] = []
+    if len(data) != SIGNAL_TOTAL_FILE_LEN:
+        errors.append(
+            f"{source}: file is {len(data)} bytes, expected {SIGNAL_TOTAL_FILE_LEN} "
+            f"(128 header + 12 s × 10.23 MHz × 8 B/sample-pair)"
+        )
+        return errors
+
+    frame_sym_0 = _frame_symbol(frame_filename, 0)
+    frame_sym_dist = _frame_symbol(frame_filename, SIGNAL_DISTINGUISHING_SYMBOL_IDX)
+    gold_chips = _gold_chips_for_prn(prn, 4)
+    weil0 = _weil_primary_chip_0(prn)
+    tert0 = _weil_tertiary_chip_0(prn)
+    sec0 = _secondary_chip_0(prn)
+
+    expected_q0 = _expected_q_sample(weil0, tert0, sec0)
+    # Probe samples within symbol 0 at chip-rate boundaries (samples 0/10/20/30)
+    # — exercises Gold[0..3] and confirms the 10-samples-per-chip upsampling at
+    # 10.23 MHz.  This part of the I-channel is dominated by the sync prefix
+    # (symbol 0 = sync_bit_0 = 1 for every shipped frame), so it cannot
+    # distinguish the 5 messages from each other.
+    sym0_probe_indices = [k * SIGNAL_I_SAMPLES_PER_CHIP for k in range(4)]
+
+    # Probe within symbol 120 — the first interleaver-output symbol, which
+    # differs across the 5 standard test messages.  This catches interleaver
+    # / LDPC bit-ordering errors that pass the sync-prefix probe.  Sample
+    # index 120 × 20460 = 2_455_200; we re-use Gold[0..3] because the AFS-I
+    # Gold code repeats every symbol (one full 2046-chip period per epoch).
+    sym_dist_base = SIGNAL_DISTINGUISHING_SYMBOL_IDX * SIGNAL_I_SAMPLES_PER_SYMBOL
+    sym_dist_probe_indices = [sym_dist_base + k * SIGNAL_I_SAMPLES_PER_CHIP for k in range(4)]
+
+    probes = [
+        (sym0_probe_indices, frame_sym_0, "sync_bit_0", 0),
+        (sym_dist_probe_indices, frame_sym_dist, "sym_120", SIGNAL_DISTINGUISHING_SYMBOL_IDX),
+    ]
+    for indices, frame_sym, label, sym_idx in probes:
+        for k, sample_idx in enumerate(indices):
+            i_got, q_got = _read_iq_pair(data, sample_idx)
+            # Range check (strict ±1.0 BPSK).  Run only on the probe samples
+            # so this function is O(1) per file; full-stream range is the
+            # caller's concern.
+            for axis, val in (("I", i_got), ("Q", q_got)):
+                if val not in (1.0, -1.0):
+                    errors.append(f"{source}: sample {sample_idx} {axis}={val!r}, expected ±1.0")
+            gold_chip = gold_chips[k]
+            expected_i = _expected_i_sample(frame_sym, gold_chip)
+            if i_got != expected_i:
+                errors.append(
+                    f"{source}: I[{sample_idx}]={i_got!r}, expected {expected_i!r} "
+                    f"(symbol {sym_idx}={frame_sym} [{label}], Gold[{k}]={gold_chip})"
+                )
+            if sample_idx == 0 and q_got != expected_q0:
+                errors.append(
+                    f"{source}: Q[0]={q_got!r}, expected {expected_q0!r} "
+                    f"(Weil[0]={weil0}, Tert[0]={tert0}, Sec[0]={sec0}, "
+                    f"sec_idx={(prn - 1) % 4})"
+                )
+    return errors
+
+
+# float32 ±1.0 in little-endian byte form: +1.0 = 00 00 80 3F, -1.0 = 00 00 80 BF.
+# These patterns cannot match at unaligned 4-byte offsets when the surrounding
+# samples are also ±1.0 (the prev sample ends with 0x3F or 0xBF and the next
+# starts with 0x00, so any 4-byte window straddling the boundary contains a
+# 0x3F|0xBF byte where the pattern requires 0x00).  We exploit that to scan a
+# 982 MB payload via bytes.count (C-level Boyer-Moore) in well under a second
+# instead of unpacking 245M floats.
+_FLOAT32_PLUS_ONE_LE = b"\x00\x00\x80\x3f"
+_FLOAT32_MINUS_ONE_LE = b"\x00\x00\x80\xbf"
+
+
+def _check_signal_full_range(data: bytes, source: str) -> list[str]:
+    """Walk every float32 sample and confirm strict ±1.0 BPSK.
+
+    Fast path (numpy present): zero-copy uint32 view + vectorised mask;
+    ~0.3 s per 982 MB payload.
+
+    Fallback path (stdlib only): byte-level Boyer-Moore count of the two
+    valid 4-byte little-endian ±1.0 patterns; ~3 s per 982 MB payload.
+    Cross-boundary false matches cannot occur because ±1.0 always begins
+    with two zero bytes, so any 4-byte window straddling a sample
+    boundary contains a 0x3F or 0xBF byte where the pattern requires
+    0x00.
+
+    Both paths return identical error reports on failure (count + first
+    bad sample localised to ``(sample, channel, value)``).
+    """
+    errors: list[str] = []
+    payload = data[SIGNAL_HEADER_LEN:]
+    n_floats = len(payload) // 4
+    if not n_floats:
+        return errors
+
+    plus_u32 = int.from_bytes(_FLOAT32_PLUS_ONE_LE, "little")
+    minus_u32 = int.from_bytes(_FLOAT32_MINUS_ONE_LE, "little")
+
+    if _np is not None:
+        arr_np = _np.frombuffer(payload, dtype="<u4")
+        bad_mask = (arr_np != plus_u32) & (arr_np != minus_u32)
+        bad = int(bad_mask.sum())
+        if bad == 0:
+            return errors
+        first_bad_idx = int(_np.argmax(bad_mask))
+    else:
+        n_pos = payload.count(_FLOAT32_PLUS_ONE_LE)
+        n_neg = payload.count(_FLOAT32_MINUS_ONE_LE)
+        bad = n_floats - n_pos - n_neg
+        if bad == 0:
+            return errors
+        arr = array.array("I")
+        arr.frombytes(payload)
+        first_bad_idx = next(i for i, w in enumerate(arr) if w not in (plus_u32, minus_u32))
+
+    bad_bytes = payload[first_bad_idx * 4 : first_bad_idx * 4 + 4]
+    (bad_val,) = struct.unpack("<f", bad_bytes)
+    errors.append(
+        f"{source}: {bad} of {n_floats} samples not ±1.0 "
+        f"(first at sample {first_bad_idx // 2} "
+        f"{'I' if first_bad_idx % 2 == 0 else 'Q'}={bad_val!r})"
+    )
+    return errors
+
+
+# ─────────────────────────────── check-signals ─────────────────────────────
+
+
+def cmd_check_signals(_args: argparse.Namespace | None = None) -> int:
+    """Validate every shipped signal file structurally + first-chip polarity."""
+    del _args
+    if not SIGNALS_DIR.is_dir():
+        print(f"ERROR: {SIGNALS_DIR} not found", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    passed = 0
+    for filename, expected_prn, source_frame in SIGNAL_TEST_VECTORS:
+        path = SIGNALS_DIR / filename
+        if not path.exists():
+            failures.append(f"{filename}: missing")
+            continue
+        try:
+            data = _read_signal_bytes(path)
+        except OSError as exc:
+            failures.append(f"{filename}: read error ({exc})")
+            continue
+        fields, header_errors = _parse_iq_header(data[:SIGNAL_HEADER_LEN], filename)
+        signal_errors = list(header_errors)
+        if fields.get("prn") != expected_prn:
+            signal_errors.append(
+                f"{filename}: header PRN={fields.get('prn')}, expected {expected_prn}"
+            )
+        signal_errors.extend(_check_signal_payload(data, expected_prn, source_frame, filename))
+        signal_errors.extend(_check_signal_full_range(data, filename))
+        failures.extend(signal_errors)
+        if not signal_errors:
+            passed += 1
+
+    total = len(SIGNAL_TEST_VECTORS)
+    print(f"  Structural + first-chip polarity: {passed:>2}/{total}")
+    if failures:
+        print(f"\nFAIL: {len(failures)} problems", file=sys.stderr)
+        for msg in failures[:20]:
+            print(f"  {msg}", file=sys.stderr)
+        if len(failures) > 20:
+            print(f"  … ({len(failures) - 20} more)", file=sys.stderr)
+        return 1
+    print(f"\nOK — all {total} signals pass structural and first-chip polarity checks.")
+    return 0
+
+
+# ─────────────────────────────── diff-signals ──────────────────────────────
+
+
+def cmd_diff_signals(args: argparse.Namespace) -> int:
+    """Compare a directory of L3 signal vectors against ours, byte-by-byte."""
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+
+    failures: list[str] = []
+    matches = 0
+    missing = 0
+    for filename, _expected_prn, _source_frame in SIGNAL_TEST_VECTORS:
+        ours_path = SIGNALS_DIR / filename
+        # Accept either .iq.gz or .iq on the user's side.
+        candidates = [other / filename, other / filename.removesuffix(".gz")]
+        their_path = next((p for p in candidates if p.exists()), None)
+        if their_path is None:
+            missing += 1
+            failures.append(f"{filename}: missing in {other}")
+            continue
+        try:
+            ours_bytes = _read_signal_bytes(ours_path)
+            their_bytes = _read_signal_bytes(their_path)
+        except OSError as exc:
+            failures.append(f"{filename}: read error ({exc})")
+            continue
+        if len(their_bytes) != SIGNAL_TOTAL_FILE_LEN:
+            failures.append(
+                f"{filename}: their file is {len(their_bytes)} bytes, "
+                f"expected {SIGNAL_TOTAL_FILE_LEN}"
+            )
+            continue
+        if ours_bytes == their_bytes:
+            matches += 1
+            continue
+        # Find the first differing byte; map to a sample index for the report.
+        first = next(
+            i for i, (a, b) in enumerate(zip(ours_bytes, their_bytes, strict=True)) if a != b
+        )
+        if first < SIGNAL_HEADER_LEN:
+            location = f"header byte {first}"
+        else:
+            sample_idx = (first - SIGNAL_HEADER_LEN) // 4 // 2
+            channel = "I" if ((first - SIGNAL_HEADER_LEN) // 4) % 2 == 0 else "Q"
+            location = f"sample {sample_idx} {channel}-byte"
+        failures.append(f"{filename}: first byte mismatch at {location} (offset {first})")
+
+    total = len(SIGNAL_TEST_VECTORS)
+    print(f"Compared {total - missing}/{total} signals (missing: {missing})")
+    print(f"  Bit-exact: {matches:>2}/{total}")
+    if failures:
+        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        for msg in failures[:10]:
+            print(f"  {msg}", file=sys.stderr)
+        return 1
+    print("\nOK — bit-exact match.")
+    return 0
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -841,7 +1315,7 @@ def _rebuild_manifest() -> int:
     Returns the number of files hashed.
     """
     entries: dict[str, str] = {}
-    for sub in ("codes", "frames", "inputs", "references"):
+    for sub in ("codes", "frames", "inputs", "signals", "references"):
         base = REPO_ROOT / sub
         if not base.is_dir():
             continue
@@ -862,13 +1336,15 @@ def _rebuild_manifest() -> int:
     manifest.update(
         {
             "version": "1.0",
-            "levels": [1, 2],
+            "levels": [1, 2, 3],
             "implementation": "LuarSpace",
             "spec": "LSIS-AFS V1.0, 29 January 2025",
             "oracles": [
                 "LNIS AD1 Volume A, Annex 3 (10 December 2024) — L1 normative",
                 "LANS-AFS-SIM (BSD-2-Clause, © 2025 Takuji Ebinuma) — L1+L2 independent",
                 "LSIS-AFS V1.0 §2.4 + Gateway 3 checklist — L2 structural",
+                "interoperability.pdf Signal Export Format + LSIS V1.0 §4 + first-chip "
+                "polarity (chains L1 codes + L2 sync prefix into L3) — L3 structural",
             ],
             "files": dict(sorted(entries.items())),
         }
@@ -934,7 +1410,7 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="validate.py",
-        description="LSIS-AFS interoperability test-vector validator (Levels 1-2).",
+        description="LSIS-AFS interoperability test-vector validator (Levels 1-3).",
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -997,6 +1473,21 @@ def main(argv: list[str] | None = None) -> int:
         "build-canonical-inputs",
         help="Regenerate inputs/ from the documented patterns (maintainer command).",
     ).set_defaults(func=cmd_build_canonical_inputs)
+
+    sub.add_parser(
+        "check-signals",
+        help="Validate signals/ structurally + first-chip polarity (L3 oracle).",
+    ).set_defaults(func=cmd_check_signals)
+
+    p_diff_signals = sub.add_parser(
+        "diff-signals",
+        help="Compare a directory of L3 signal vectors to ours, byte-by-byte.",
+    )
+    p_diff_signals.add_argument(
+        "other_dir",
+        help="Directory containing signal_*_12s.iq[.gz] files to compare against ours.",
+    )
+    p_diff_signals.set_defaults(func=cmd_diff_signals)
 
     sub.add_parser(
         "verify-manifest",

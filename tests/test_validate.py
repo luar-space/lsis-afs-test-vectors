@@ -9,8 +9,10 @@ subcommand from the command line, plus positive+negative pairs for
 
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -372,11 +374,12 @@ def test_refresh_without_url_is_helpful() -> None:
 def test_manifest_structure() -> None:
     manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
     assert manifest["version"] == "1.0"
-    assert manifest["levels"] == [1, 2]  # grows as future drops land
+    assert manifest["levels"] == [1, 2, 3]  # grows as future drops land
     assert "oracles" in manifest
-    assert len(manifest["oracles"]) >= 3  # L1 normative + L1/L2 LANS + L2 structural
-    # 630 L1 codes + 7 frames + 7 LANS frames + 7 canonical inputs + readmes
-    assert len(manifest["files"]) >= 654
+    # L1 normative + L1/L2 LANS + L2 structural + L3 structural
+    assert len(manifest["oracles"]) >= 4
+    # 630 L1 codes + 7 frames + 7 LANS frames + 7 canonical inputs + 10 L3 signals + readmes
+    assert len(manifest["files"]) >= 661
 
 
 def test_manifest_covers_every_code_file() -> None:
@@ -432,7 +435,14 @@ def test_build_config_includes_runtime_data() -> None:
     sdist = sdist.split("[dependency-groups]", maxsplit=1)[0]
 
     for section in (wheel, sdist):
-        for needle in ('"codes"', '"frames"', '"references"', '"manifest.json"'):
+        for needle in (
+            '"codes"',
+            '"frames"',
+            '"inputs"',
+            '"signals"',
+            '"references"',
+            '"manifest.json"',
+        ):
             assert needle in section
 
 
@@ -455,9 +465,11 @@ def test_no_args_shows_help_and_errors() -> None:
         "check-frames",
         "check-lans-afs-sim-frames",
         "check-canonical-inputs",
+        "check-signals",
         "diff",
         "diff-frames",
         "diff-inputs",
+        "diff-signals",
         "build-canonical-inputs",
         "verify-manifest",
         "rebuild-manifest",
@@ -482,8 +494,232 @@ def test_rebuild_manifest_is_idempotent(tmp_path: Path) -> None:
     assert verify.returncode == 0, verify.stderr
     # Structural checks on the regenerated file
     after = json.loads((REPO_ROOT / "manifest.json").read_text())
-    assert after["levels"] == [1, 2]
-    assert len(after["files"]) >= 648
+    assert after["levels"] == [1, 2, 3]
+    assert len(after["files"]) >= 655
     # Restore the original manifest so the test has no side-effect on other tests
     (REPO_ROOT / "manifest.json").write_text(before)
     _ = tmp_path  # unused — reserved for future symlink isolation if needed
+
+
+# ─────────────────────────────── L3 signals ────────────────────────────────
+
+
+def _gunzip_to(path: Path, dst: Path) -> Path:
+    """Copy a possibly-gzipped signal file into dst (uncompressed)."""
+
+    if path.suffix == ".gz":
+        out = dst / path.name[: -len(".gz")]
+        with gzip.open(path, "rb") as f_in, out.open("wb") as f_out:
+            while chunk := f_in.read(1 << 20):
+                f_out.write(chunk)
+        return out
+    out = dst / path.name
+    out.write_bytes(path.read_bytes())
+    return out
+
+
+def test_check_signals_passes() -> None:
+    result = run("check-signals")
+    assert result.returncode == 0, result.stderr
+    assert "10/10" in result.stdout
+    assert "OK — all 10 signals pass" in result.stdout
+
+
+def test_check_signals_catches_header_magic_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Flipping the LSISIQ magic byte must be flagged."""
+
+    mutated = tmp_path / "signals-mutated"
+    mutated.mkdir()
+    src = REPO_ROOT / "signals" / "signal_message_1_12s.iq.gz"
+    raw = gzip.decompress(src.read_bytes())
+    raw = b"X" + raw[1:]  # corrupt the first magic byte
+    (mutated / "signal_message_1_12s.iq.gz").write_bytes(gzip.compress(raw, compresslevel=1))
+    # Copy other files unchanged so the loop still finds them.
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        if name == "signal_message_1_12s.iq.gz":
+            continue
+        (mutated / name).write_bytes((REPO_ROOT / "signals" / name).read_bytes())
+
+    monkeypatch.setattr(validate, "SIGNALS_DIR", mutated)
+    rc = validate.cmd_check_signals()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "Structural + first-chip polarity:  9/10" in captured.out
+    assert "magic=" in captured.err
+
+
+def test_check_signals_catches_sample_range_violation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Writing a sample of 0.5 (not in {-1, +1}) must be flagged."""
+
+    mutated = tmp_path / "signals-mutated"
+    mutated.mkdir()
+    src = REPO_ROOT / "signals" / "signal_message_1_12s.iq.gz"
+    raw = bytearray(gzip.decompress(src.read_bytes()))
+    # Overwrite the very first I sample (offset 128..132) with 0.5f.
+    raw[128:132] = struct.pack("<f", 0.5)
+    (mutated / "signal_message_1_12s.iq.gz").write_bytes(gzip.compress(bytes(raw), compresslevel=1))
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        if name == "signal_message_1_12s.iq.gz":
+            continue
+        (mutated / name).write_bytes((REPO_ROOT / "signals" / name).read_bytes())
+
+    monkeypatch.setattr(validate, "SIGNALS_DIR", mutated)
+    rc = validate.cmd_check_signals()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "Structural + first-chip polarity:  9/10" in captured.out
+    # Could be flagged either by the probe-sample range check or the polarity
+    # check (both fire on the same byte).  Accept either signal.
+    assert "0.5" in captured.err or "I[0]=" in captured.err
+
+
+def test_check_signals_catches_first_chip_polarity_flip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Inverting the I-channel polarity for chip 0 must be flagged by the polarity check."""
+
+    mutated = tmp_path / "signals-mutated"
+    mutated.mkdir()
+    src = REPO_ROOT / "signals" / "signal_message_1_12s.iq.gz"
+    raw = bytearray(gzip.decompress(src.read_bytes()))
+    # Read the first I sample, negate it, write back.  This corrupts only the
+    # polarity at sample 0; the value stays in {-1, +1} so the range check
+    # still passes, isolating the failure to the polarity oracle.
+    (i0,) = struct.unpack("<f", bytes(raw[128:132]))
+    raw[128:132] = struct.pack("<f", -i0)
+    (mutated / "signal_message_1_12s.iq.gz").write_bytes(gzip.compress(bytes(raw), compresslevel=1))
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        if name == "signal_message_1_12s.iq.gz":
+            continue
+        (mutated / name).write_bytes((REPO_ROOT / "signals" / name).read_bytes())
+
+    monkeypatch.setattr(validate, "SIGNALS_DIR", mutated)
+    rc = validate.cmd_check_signals()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "I[0]=" in captured.err
+    assert "Gold[0]" in captured.err
+
+
+def test_check_signals_catches_symbol_120_polarity_flip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Inverting the I-channel polarity at frame symbol 120 must be flagged.
+
+    Symbol 120 is the first content-distinguishing frame symbol (symbols
+    0..67 are sync, 68..119 are BCH SB1 of the shared FID/TOI), so the
+    sym-120 polarity probe (added in v0.3.0) is what catches LDPC /
+    interleaver bit-ordering errors that the chip-0 probe at sample 0
+    would not.  This test is the regression lock for that oracle: flip
+    the I sample at the start of symbol 120 (sample index 120 × 20460 =
+    2 455 200) and confirm ``check-signals`` reports the sym_120 label
+    and the correct sample index.
+    """
+    mutated = tmp_path / "signals-mutated"
+    mutated.mkdir()
+    src = REPO_ROOT / "signals" / "signal_message_1_12s.iq.gz"
+    raw = bytearray(gzip.decompress(src.read_bytes()))
+    # Sample N's I-byte starts at offset 128 + N × 8.  N = 2 455 200 (start
+    # of symbol 120), so byte offset = 128 + 19 641 600 = 19 641 728.
+    sym120_sample_idx = (
+        validate.SIGNAL_DISTINGUISHING_SYMBOL_IDX * validate.SIGNAL_I_SAMPLES_PER_SYMBOL
+    )
+    assert sym120_sample_idx == 2_455_200, sym120_sample_idx
+    offset = validate.SIGNAL_HEADER_LEN + sym120_sample_idx * validate.SIGNAL_BYTES_PER_SAMPLE_PAIR
+    (i_val,) = struct.unpack("<f", bytes(raw[offset : offset + 4]))
+    raw[offset : offset + 4] = struct.pack("<f", -i_val)
+    (mutated / "signal_message_1_12s.iq.gz").write_bytes(gzip.compress(bytes(raw), compresslevel=1))
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        if name == "signal_message_1_12s.iq.gz":
+            continue
+        (mutated / name).write_bytes((REPO_ROOT / "signals" / name).read_bytes())
+
+    monkeypatch.setattr(validate, "SIGNALS_DIR", mutated)
+    rc = validate.cmd_check_signals()
+    captured = capsys.readouterr()
+    assert rc == 1
+    # The error message uses the sym_120 label and reports the sample index.
+    assert "sym_120" in captured.err, captured.err
+    assert "I[2455200]" in captured.err, captured.err
+    # Sanity: the chip-0 probe at sample 0 still passes (no I[0] error reported).
+    assert "I[0]=" not in captured.err, captured.err
+
+
+def test_diff_signals_self_is_clean(tmp_path: Path) -> None:
+    """Comparing signals/ against an unzipped copy of itself must report bit-exact match."""
+    other = tmp_path / "signals-copy"
+    other.mkdir()
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        _gunzip_to(REPO_ROOT / "signals" / name, other)
+    result = run("diff-signals", str(other))
+    assert result.returncode == 0, result.stderr
+    assert "OK — bit-exact match" in result.stdout
+
+
+def test_diff_signals_detects_mutation(tmp_path: Path) -> None:
+    """A deliberately-mutated copy must exit non-zero and name the differing signal."""
+
+    other = tmp_path / "signals-mutated"
+    other.mkdir()
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        src = REPO_ROOT / "signals" / name
+        raw = bytearray(gzip.decompress(src.read_bytes()))
+        if name == "signal_message_1_12s.iq.gz":
+            # Flip a sample deep in the payload (sample 1000) so we know
+            # diff-signals locates it correctly.
+            offset = validate.SIGNAL_HEADER_LEN + 1000 * 8
+            (val,) = struct.unpack("<f", bytes(raw[offset : offset + 4]))
+            raw[offset : offset + 4] = struct.pack("<f", -val)
+        (other / name).write_bytes(gzip.compress(bytes(raw), compresslevel=1))
+
+    result = run("diff-signals", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "signal_message_1_12s" in combined
+
+
+def test_diff_signals_missing_file_reported(tmp_path: Path) -> None:
+    """Dropping a signal from the copy must show up as missing."""
+    other = tmp_path / "signals-partial"
+    other.mkdir()
+    # Copy everything except signal_message_5_12s.iq.gz.
+    dropped = "signal_message_5_12s.iq.gz"
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        if name == dropped:
+            continue
+        (other / name).write_bytes((REPO_ROOT / "signals" / name).read_bytes())
+
+    result = run("diff-signals", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "signal_message_5" in combined or "missing: 1" in combined
+
+
+def test_signals_are_strict_bpsk_at_probe_sites() -> None:
+    """End-to-end smoke: every shipped signal has I,Q ∈ {-1, +1} at the probe sites."""
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        data = validate._read_signal_bytes(REPO_ROOT / "signals" / name)
+        for sample_idx in (0, 10, 20, 30):
+            i_val, q_val = validate._read_iq_pair(data, sample_idx)
+            assert i_val in (1.0, -1.0), f"{name}: I[{sample_idx}]={i_val}"
+            assert q_val in (1.0, -1.0), f"{name}: Q[{sample_idx}]={q_val}"
+
+
+def test_manifest_covers_every_signal_file() -> None:
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    for name, _prn, _src in validate.SIGNAL_TEST_VECTORS:
+        rel = f"signals/{name}"
+        assert rel in files, f"{rel} missing from manifest"

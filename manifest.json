@@ -2,14 +2,16 @@
   "version": "1.0",
   "levels": [
     1,
-    2
+    2,
+    3
   ],
   "implementation": "LuarSpace",
   "spec": "LSIS-AFS V1.0, 29 January 2025",
   "oracles": [
     "LNIS AD1 Volume A, Annex 3 (10 December 2024) \u2014 L1 normative",
     "LANS-AFS-SIM (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma) \u2014 L1+L2 independent",
-    "LSIS-AFS V1.0 \u00a72.4 + Gateway 3 checklist \u2014 L2 structural"
+    "LSIS-AFS V1.0 \u00a72.4 + Gateway 3 checklist \u2014 L2 structural",
+    "interoperability.pdf Signal Export Format + LSIS V1.0 \u00a74 + first-chip polarity (chains L1 codes + L2 sync prefix into L3) \u2014 L3 structural"
   ],
   "files": {
     "codes/codes_prn001.hex": "cecb0cc305103fe6e5643855ab5daa6f4312402b46566928b44c48a95c0147b3",
@@ -676,6 +678,16 @@
     "references/lans-afs-sim/harnesses/dump_lans_codes.c": "767a051da471b4c6ab15a225320b63b46eca75fdd669b1601882ca53ddc193f4",
     "references/lans-afs-sim/harnesses/dump_lans_frame.c": "5bbdfbb189dbed9c98ca5e1f9e7831aa57ee704047ef4465c94981cc798dda8a",
     "references/lans-afs-sim/harnesses/verify_oracle.py": "aaabcfc92d26428511e7c968b1705fb3aa75e3397de57acf5e08ab445effcb4e",
-    "references/technical-faq.pdf": "dc52419081bf8eca7d766f2cc753cce19b83f819aa838e53dd09695cd97c4f89"
+    "references/technical-faq.pdf": "dc52419081bf8eca7d766f2cc753cce19b83f819aa838e53dd09695cd97c4f89",
+    "signals/signal_boundary_at_prn12_12s.iq.gz": "785d24de1a57df41fe1ae30dafc089ccdaad64458f18feaf9c2f9d40d9c70591",
+    "signals/signal_boundary_max_fields_at_prn12_12s.iq.gz": "8ff9d50fba9aa5ae52f9bbd111332b47a22863b1dc8ce11349b4d03ebe7ee0d8",
+    "signals/signal_message_1_12s.iq.gz": "19b085fb937ac7721ea175c814def7150cb3b4050f6d785f3a043058150d6e9f",
+    "signals/signal_message_2_12s.iq.gz": "9cd9e05b5e15fc1df6b5e028386a1f390d90d30eed39f67a9f1c6d705ac016bf",
+    "signals/signal_message_3_12s.iq.gz": "beba1bc326dc662885415cb2eecc0295208bd3b972c00fb7fbbaaaebecdce87f",
+    "signals/signal_message_4_12s.iq.gz": "adeb666bc6ae27039cfe314210a0b2eab914fee1bd0387232545eb0d500578d1",
+    "signals/signal_message_5_12s.iq.gz": "9231ee74e90fa1130c8ebba1f42fe7b977a87f8e5b0037c9ddbc01c8538d356f",
+    "signals/signal_prn12_baseline_12s.iq.gz": "6b01270ccd9ef5eedf20aa363c6e205f68ce2f8c62555f37d4218668e122d221",
+    "signals/signal_prn2_baseline_12s.iq.gz": "8750e1aeeaa7507fe1af46a31b13a6d934640f71801be2d82fbec2babc9517df",
+    "signals/signal_prn3_baseline_12s.iq.gz": "9e0031fa036e49c4764bcfcd1d5062cc574fd2a64be99ec96139864448d70d4a"
   }
 }
