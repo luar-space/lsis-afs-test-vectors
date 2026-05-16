@@ -1,12 +1,11 @@
 # LSIS-AFS Decoding Round-Robin — Proposed Protocol
 
-> **Status: PROPOSAL.** This defines a concrete, runnable contract for the
-> Level 4 cross-decoding round-robin in
-> [`references/interoperability.pdf`](references/interoperability.pdf). Per
-> that document's Phase 1 ("Agree on test vector formats"), it only becomes
-> *the* shared method once participating teams agree to it. Disagreements
-> are welcome — open an issue. The goal is a shared baseline, not a
-> monoculture.
+> **Status: PROPOSAL.** This document outlines a concrete, runnable proposal 
+> on how to run the Level 4 cross-decoding exercise as described in 
+> [`references/interoperability.pdf`](references/interoperability.pdf) 
+> that could be used during the Goonhilly June workshop. 
+> It also provides the tooling to automate the comparison and a set of 
+> standardised input vectors.
 
 ## What this is
 
@@ -42,14 +41,13 @@ decoder*.
 
 **Proposed standard reference set.** Rather than have each team re-derive
 the standardized messages and hope the bytes agree, this protocol proposes
-**this repository's `inputs/` (and `frames/`), pinned to the `v0.4.0`
-release tag, as the single agreed reference everyone diffs against.** These
+**this repository's `inputs/` (and `frames/`), pinned to an agreed
+release tag (TBD before the workshop), as the single agreed reference
+everyone diffs against.** These
 are not ad-hoc: `inputs/` is the canonical pre-encode data, unchanged since
 v0.2.1, cross-checked by the L2 structural oracle and LANS-AFS-SIM, and
 round-tripped byte-exact by an independent receiver (PocketSDR-AFS) at L4.
-Integrity is anchored by `manifest.json` — run `python validate.py
-verify-manifest` after checkout to confirm you hold exactly the agreed
-bytes. With this proposal accepted, `diff-decode` with **no `--reference`**
+With this proposal accepted, `diff-decode` with **no `--reference`**
 already compares against the standard; `--reference DIR` exists only for a
 group-agreed *alternate or extended* set.
 
@@ -85,7 +83,8 @@ For each input signal, write into one directory:
 
 ### Reference: the expected bytes
 
-The proposed standard reference is **this repository at the `v0.4.0` tag**:
+The proposed standard reference is **this repository at an agreed pinned
+tag (TBD before the workshop)**:
 
 - `inputs/frame_<id>_input.bin` — 2868 bytes, the canonical pre-encode data
   the post-FEC output must equal. **This is the round-robin's source of
@@ -106,7 +105,6 @@ this layout — but the default, and the proposal, is the set shipped here.
 python validate.py diff-decode out/                 # vs this repo's reference
 python validate.py diff-decode out/ --reference R/   # vs an agreed set R/
 python validate.py diff-decode out/ --json           # machine-readable cell
-python validate.py diff-decode out/ --vs-pocketsdr   # + secondary vs our decoder
 ```
 
 Exit codes: **0** = pass (all post-FEC match; no channel file is
@@ -178,5 +176,4 @@ a failure, not a skip.
 This is a proposal for the workshop. If the format, layout, or pass
 definition doesn't fit your implementation, say so before the round-robin —
 agreeing the contract (interop-plan Phase 1) is the point of publishing it
-early. Once agreed, this file is the normative description and
-`diff-decode` the reference checker.
+early.
