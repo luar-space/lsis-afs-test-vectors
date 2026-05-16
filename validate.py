@@ -1473,14 +1473,22 @@ def cmd_diff_decode(args: argparse.Namespace) -> int:
     """Validate a third party's decoded outputs against the original input.
 
     Default — the interoperability-plan **Level 4 pass criterion**
-    ("Decoded data matches original input exactly"): for every signal in
-    SIGNAL_TEST_VECTORS, ``<other_dir>/decoded_signal_*.bin`` is compared
-    byte-for-byte against ``frames/<source>[64:6064]`` (channel-symbol
-    layer) and ``<other_dir>/decoded_fec_signal_*.bin`` against
-    ``inputs/<source>_input.bin`` (post-FEC layer), with first-mismatch
-    localisation.  This is exactly the comparison ``check-decode`` runs on
-    our own reference outputs — applied to a third-party directory, with
-    no indirection through our decoder's rendering.
+    ("Decoded data matches original input exactly").  For every signal in
+    SIGNAL_TEST_VECTORS:
+
+    * **Post-FEC (required)** — ``<other_dir>/decoded_fec_signal_*.bin``
+      is compared byte-for-byte against ``inputs/<source>_input.bin``.
+      This *is* the pass criterion; an absent file is a failure.
+    * **Channel-symbol (optional diagnostic)** —
+      ``<other_dir>/decoded_signal_*.bin`` against
+      ``frames/<source>[64:6064]``.  It localises *where* a decoder
+      diverges, but the post-sync / pre-deinterleave tap it needs is not
+      something every receiver exposes, so an absent file is *not* a
+      failure; a present-but-wrong one still is.
+
+    Both use first-mismatch localisation — exactly the comparison
+    ``check-decode`` runs on our own reference outputs, applied to a
+    third-party directory with no indirection through our decoder.
 
     With ``--vs-pocketsdr``, additionally diff ``<other_dir>`` against the
     bundled ``references/pocketsdr-afs/decoded/`` reference (secondary,
@@ -1492,10 +1500,17 @@ def cmd_diff_decode(args: argparse.Namespace) -> int:
         return 2
 
     total = len(SIGNAL_TEST_VECTORS)
-    chan_ok, chan_missing, fec_ok, fec_missing, failures = _diff_decode_vs_input(other)
-    print("vs original input (frames/ + inputs/) — Level 4 pass criterion:")
-    print(f"  Channel-symbol vs frames/:  {chan_ok:>2}/{total}  (missing: {chan_missing})")
-    print(f"  Post-FEC vs inputs/:        {fec_ok:>2}/{total}  (missing: {fec_missing})")
+    chan_ok, chan_absent, fec_ok, fec_missing, failures = _diff_decode_vs_input(other)
+    print("vs original input — Level 4 pass criterion:")
+    print(f"  Post-FEC vs inputs/    (required):  {fec_ok:>2}/{total}  (missing: {fec_missing})")
+    chan_provided = total - chan_absent
+    if chan_provided == 0:
+        print("  Channel-symbol vs frames/ (optional):  not provided — fine")
+    else:
+        print(
+            f"  Channel-symbol vs frames/ (optional):  {chan_ok:>2}/{chan_provided} provided"
+            f"  ({chan_absent} not provided)"
+        )
 
     if args.vs_pocketsdr:
         ps_chan, ps_fec, secondary = _diff_decode_vs_pocketsdr(other)
@@ -1516,31 +1531,38 @@ def cmd_diff_decode(args: argparse.Namespace) -> int:
 def _diff_decode_vs_input(other: Path) -> tuple[int, int, int, int, list[str]]:
     """Validate <other> against frames/+inputs/ (the Level 4 pass criterion).
 
-    Returns (chan_ok, chan_missing, fec_ok, fec_missing, failures).
+    Post-FEC (vs ``inputs/``) is **required** — it is the pass criterion,
+    so an absent file is a failure.  Channel-symbol (vs
+    ``frames/[64:6064]``) is an **optional diagnostic** — an absent file
+    is not a failure, but a present-but-wrong one still is.
+
+    Returns (chan_ok, chan_absent, fec_ok, fec_missing, failures).
     """
     failures: list[str] = []
-    chan_ok = chan_missing = fec_ok = fec_missing = 0
+    chan_ok = chan_absent = fec_ok = fec_missing = 0
     for signal_filename, _prn, source_frame in SIGNAL_TEST_VECTORS:
         chan_name = _decoded_filename_for(signal_filename)
         chan_path = other / chan_name
         if not chan_path.exists():
-            chan_missing += 1
-            failures.append(f"{chan_name}: missing in {other}")
+            chan_absent += 1  # optional layer — absence is not a failure
         elif (e := _verify_decoded_chan(chan_name, chan_path.read_bytes(), source_frame)) is None:
             chan_ok += 1
         else:
-            failures.append(e)
+            failures.append(e)  # present but wrong still fails
 
         fec_name = _decoded_fec_filename_for(signal_filename)
         fec_path = other / fec_name
         if not fec_path.exists():
             fec_missing += 1
-            failures.append(f"{fec_name}: missing in {other}")
+            failures.append(
+                f"{fec_name}: missing in {other} "
+                "(required — post-FEC vs inputs/ is the Level 4 pass criterion)"
+            )
         elif (e := _verify_decoded_fec(fec_name, fec_path.read_bytes(), source_frame)) is None:
             fec_ok += 1
         else:
             failures.append(e)
-    return chan_ok, chan_missing, fec_ok, fec_missing, failures
+    return chan_ok, chan_absent, fec_ok, fec_missing, failures
 
 
 def _diff_decode_vs_pocketsdr(other: Path) -> tuple[int, int, list[str]]:

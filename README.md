@@ -339,8 +339,10 @@ python validate.py diff-inputs  /path/to/your/inputs/
 python validate.py diff-signals /path/to/your/signals/
 
 # diff-decode validates your decoded output against the original input
-# (frames/ + inputs/) — the Level 4 pass criterion itself, not a diff
-# against our decoder.  --vs-pocketsdr adds an optional secondary diff.
+# — the Level 4 pass criterion itself, not a diff against our decoder.
+# Required: decoded_fec_signal_*.bin vs inputs/ (the recovered data).
+# Optional diagnostic: decoded_signal_*.bin vs frames/ (channel symbols;
+# absent is fine).  --vs-pocketsdr adds an optional secondary diff.
 python validate.py diff-decode  /path/to/your/decoded/
 
 # Re-hash everything to confirm the distribution is intact.

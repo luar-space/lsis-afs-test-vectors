@@ -116,9 +116,13 @@ canonical-input layer (vs `inputs/`) byte-for-byte.
     first-mismatch localised to `(filename, byte_index,
     expected, got)`.  This is `check-decode`'s comparison
     applied to a foreign directory — no indirection through
-    our decoder's rendering.  `--vs-pocketsdr` adds an
-    optional secondary diff against the bundled PocketSDR
-    reference decode.
+    our decoder's rendering.  Post-FEC vs `inputs/` is
+    **required** (it *is* the criterion); the channel-symbol
+    vs `frames/` layer is an **optional diagnostic** — absent
+    is fine (most receivers don't expose the pre-deinterleave
+    tap), present-but-wrong still fails.  `--vs-pocketsdr`
+    adds an optional secondary diff against the bundled
+    PocketSDR reference decode.
 - `_rebuild_manifest()` excludes generated artefacts (`__pycache__/*.pyc`,
   `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.tox`).  A maintainer
   who has imported the harness modules locally creates `.pyc` files

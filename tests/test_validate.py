@@ -795,8 +795,8 @@ def test_diff_decode_self_is_clean(tmp_path: Path) -> None:
             (other / path.name).write_bytes(path.read_bytes())
     result = run("diff-decode", str(other))
     assert result.returncode == 0, result.stderr
-    assert "Channel-symbol vs frames/:  10/10" in result.stdout
-    assert "Post-FEC vs inputs/:        10/10" in result.stdout
+    assert "Post-FEC vs inputs/    (required):  10/10" in result.stdout
+    assert "Channel-symbol vs frames/ (optional):  10/10 provided" in result.stdout
     assert "OK — decoded data matches original input exactly" in result.stdout
 
 
@@ -815,13 +815,29 @@ def test_diff_decode_vs_pocketsdr_secondary(tmp_path: Path) -> None:
 
 
 def test_diff_decode_reports_missing_file(tmp_path: Path) -> None:
-    """An empty directory must fail with per-file 'missing' diagnostics."""
+    """An empty directory must fail — post-FEC (the L4 criterion) is required."""
     other = tmp_path / "empty"
     other.mkdir()
     result = run("diff-decode", str(other))
     assert result.returncode == 1
     combined = result.stdout + result.stderr
     assert "missing in" in combined
+    assert "post-FEC vs inputs/ is the Level 4 pass criterion" in combined
+
+
+def test_diff_decode_postfec_only_passes(tmp_path: Path) -> None:
+    """Post-FEC files alone (no channel-symbol tap) must pass — the channel
+    layer is an optional diagnostic, the realistic third-party case."""
+    other = tmp_path / "fec-only"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_fec_"):
+            (other / path.name).write_bytes(path.read_bytes())
+    result = run("diff-decode", str(other))
+    assert result.returncode == 0, result.stderr
+    assert "Post-FEC vs inputs/    (required):  10/10" in result.stdout
+    assert "Channel-symbol vs frames/ (optional):  not provided — fine" in result.stdout
+    assert "OK — decoded data matches original input exactly" in result.stdout
 
 
 def test_diff_decode_detects_channel_mutation(tmp_path: Path) -> None:
