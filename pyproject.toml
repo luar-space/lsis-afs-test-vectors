@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lsis-afs-test-vectors"
-version = "0.3.0"
-description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.3.0 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames) plus their canonical pre-encode SB2/SB3/SB4 input bytes, and Level 3 baseband I/Q signals (9 × 12 s @ 10.23 MHz, gzipped) generated from the matching L2 frames. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (independent), the LSIS V1.0 §2.4 structural rules, and a first-chip polarity oracle that chains L1 codes + L2 sync prefix into L3. The Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside for end-to-end reproducibility."
+version = "0.4.0"
+description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5). v0.4.0 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames) plus their canonical pre-encode SB2/SB3/SB4 input bytes, Level 3 baseband I/Q signals (10 × 12 s @ 10.23 MHz, gzipped) generated from the matching L2 frames, and Level 4 cross-decode outputs produced by PocketSDR-AFS @ pinned SHA from those signals (10 × 6000 symbols, byte-exact equal to the L2 frame payloads, closing the receive-side loop). Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (L1+L2 independent), the LSIS V1.0 §2.4 structural rules, a first-chip polarity oracle (L3 structural), and PocketSDR-AFS (L4 cross-decode). Apache-2.0 source for the LANS-AFS-SIM and PocketSDR-AFS verification harnesses ships alongside for end-to-end reproducibility."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"

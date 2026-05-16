@@ -19,8 +19,8 @@ keywords:
   - ESA
   - test-vectors
   - interoperability
-version: "0.3.0"
-date-released: "2026-05-04"
+version: "0.4.0"
+date-released: "2026-05-05"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
@@ -28,7 +28,7 @@ abstract: >-
   Signal-In-Space Augmented Forward Signal) specification, Version 1.0
   (29 January 2025). Targets the five test levels defined in the
   competition interoperability plan, shipped incrementally as drops to
-  the same repository.  Version 0.3.0 covers Levels 1, 2, and 3.
+  the same repository.  Version 0.4.0 covers Levels 1, 2, 3, and 4.
   Level 1 ships all 210 PRN spreading codes — Gold (AFS-I primary),
   Weil 10230 (AFS-Q primary), Weil 1500 (tertiary) and the four AFS-Q
   secondary codes — in the standardized hex format, bit-exact against
@@ -38,16 +38,15 @@ abstract: >-
   input bytes, including two boundary frames from Test Case 4
   (header-field maxima PRN=210/FID=3/TOI=99 and SB2-field maxima
   WN=8191/ITOW=503), validated against LSIS V1.0 §2.4 structural rules
-  and LANS-AFS-SIM bit-exact frame dumps.  Level 3 ships nine
-  baseband I/Q signal vectors (12 s × 10.23 MHz, gzipped LSISIQ float32
-  format, ~200 MB total) covering interop-doc TC1 (baseline), TC2
-  (PRN coverage at all four AFS-Q secondary indices S0–S3 via PRN
-  1/2/3/12), and TC4 (FID/TOI maxima at PRN 12).  A structural +
-  first-chip + symbol-120 polarity oracle chains the Annex-3-verified
-  Gold/Weil/Tertiary chips and the FAQ-Q17-pinned sync prefix into the
-  L3 sample stream and catches deep-frame interleaver / LDPC errors that
-  the sync-prefix probe alone cannot.
-  v0.3.0 ships a single formal oracle for L3; receive-side closure via
-  PocketSDR-AFS arrives in v0.4.0 alongside the L4 deliverable.
-  Apache-2.0 source for the LANS-AFS-SIM dump harnesses ships alongside
-  for end-to-end reproducibility.  Subsequent drops will add Levels 4–5.
+  and LANS-AFS-SIM bit-exact frame dumps.  Level 3 ships ten baseband
+  I/Q signal vectors (12 s × 10.23 MHz, gzipped LSISIQ float32 format,
+  ~220 MB total) covering interop-doc TC1 (baseline), TC2 (PRN coverage
+  at all four AFS-Q secondary indices S0–S3 via PRN 1/2/3/12), and TC4
+  (FID/TOI + WN/ITOW maxima at PRN 12).  Level 4 closes the receive
+  side: PocketSDR-AFS (BSD-2-Clause, pinned upstream SHA) demodulates
+  every L3 signal and recovers the corresponding L2 frame's 6000-symbol
+  payload byte-for-byte; the bundled cross-decode outputs are shipped
+  alongside the verifier that regenerates them from upstream sources.
+  Apache-2.0 source for the LANS-AFS-SIM and PocketSDR-AFS verification
+  harnesses ships alongside for end-to-end reproducibility.  Subsequent
+  drops will add Level 5.
