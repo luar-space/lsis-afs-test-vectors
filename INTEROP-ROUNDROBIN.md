@@ -38,8 +38,20 @@ The interop plan standardizes the message set (TM1 all-zeros … TM5
 seeded-random, plus the Test Case 4 boundary frames). So in the round-robin
 the **expected decoded bytes are shared by everyone** — they are not
 per-team secrets. The variable axes are only *whose signal* and *whose
-decoder*. The reference (`inputs/`, and optionally `frames/`) is therefore a
-shared artifact, not something each team supplies privately.
+decoder*.
+
+**Proposed standard reference set.** Rather than have each team re-derive
+the standardized messages and hope the bytes agree, this protocol proposes
+**this repository's `inputs/` (and `frames/`), pinned to the `v0.4.0`
+release tag, as the single agreed reference everyone diffs against.** These
+are not ad-hoc: `inputs/` is the canonical pre-encode data, unchanged since
+v0.2.1, cross-checked by the L2 structural oracle and LANS-AFS-SIM, and
+round-tripped byte-exact by an independent receiver (PocketSDR-AFS) at L4.
+Integrity is anchored by `manifest.json` — run `python validate.py
+verify-manifest` after checkout to confirm you hold exactly the agreed
+bytes. With this proposal accepted, `diff-decode` with **no `--reference`**
+already compares against the standard; `--reference DIR` exists only for a
+group-agreed *alternate or extended* set.
 
 ## File contract
 
@@ -73,14 +85,18 @@ For each input signal, write into one directory:
 
 ### Reference: the expected bytes
 
+The proposed standard reference is **this repository at the `v0.4.0` tag**:
+
 - `inputs/frame_<id>_input.bin` — 2868 bytes, the canonical pre-encode data
-  the post-FEC output must equal.
+  the post-FEC output must equal. **This is the round-robin's source of
+  truth** (it is the original input the L4 criterion names).
 - `frames/frame_<id>.bin[64:6064]` — 6000 bytes, the encoded channel
   symbols the (optional) channel output must equal.
 
-This repo ships the standard set. An agreed alternate/extended set can be
+Pin to the tag and `verify-manifest` so every team diffs against
+byte-identical truth. A group-agreed *alternate or extended* set may be
 supplied via `--reference DIR` where `DIR/frames/` and `DIR/inputs/` mirror
-this layout.
+this layout — but the default, and the proposal, is the set shipped here.
 
 ## Running one matrix cell
 
