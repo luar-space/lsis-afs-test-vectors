@@ -786,7 +786,8 @@ def test_check_decode_passes() -> None:
 
 
 def test_diff_decode_self_is_clean(tmp_path: Path) -> None:
-    """Comparing decoded/ against a copy of itself must report bit-exact on both layers."""
+    """The bundled reference is byte-equal to frames/+inputs/ (check-decode
+    guarantees it), so diff-decode of a copy must pass the Level 4 criterion."""
     other = tmp_path / "decoded-copy"
     other.mkdir()
     for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
@@ -794,9 +795,33 @@ def test_diff_decode_self_is_clean(tmp_path: Path) -> None:
             (other / path.name).write_bytes(path.read_bytes())
     result = run("diff-decode", str(other))
     assert result.returncode == 0, result.stderr
-    assert "Channel bit-exact: 10/10" in result.stdout
-    assert "Post-FEC bit-exact: 10/10" in result.stdout
-    assert "OK — bit-exact match" in result.stdout
+    assert "Channel-symbol vs frames/:  10/10" in result.stdout
+    assert "Post-FEC vs inputs/:        10/10" in result.stdout
+    assert "OK — decoded data matches original input exactly" in result.stdout
+
+
+def test_diff_decode_vs_pocketsdr_secondary(tmp_path: Path) -> None:
+    """--vs-pocketsdr adds the secondary diff against the bundled reference."""
+    other = tmp_path / "decoded-copy"
+    other.mkdir()
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith("decoded_"):
+            (other / path.name).write_bytes(path.read_bytes())
+    result = run("diff-decode", str(other), "--vs-pocketsdr")
+    assert result.returncode == 0, result.stderr
+    assert "Level 4 pass criterion" in result.stdout
+    assert "vs PocketSDR reference decode (secondary)" in result.stdout
+    assert "OK — decoded data matches original input exactly" in result.stdout
+
+
+def test_diff_decode_reports_missing_file(tmp_path: Path) -> None:
+    """An empty directory must fail with per-file 'missing' diagnostics."""
+    other = tmp_path / "empty"
+    other.mkdir()
+    result = run("diff-decode", str(other))
+    assert result.returncode == 1
+    combined = result.stdout + result.stderr
+    assert "missing in" in combined
 
 
 def test_diff_decode_detects_channel_mutation(tmp_path: Path) -> None:

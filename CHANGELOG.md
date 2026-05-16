@@ -109,9 +109,16 @@ canonical-input layer (vs `inputs/`) byte-for-byte.
     * Post-FEC oracle: every `decoded_fec_signal_*.bin` is
       2868 bytes of {0, 1} and byte-equal to the corresponding
       `inputs/frame_*_input.bin`.
-  - `diff-decode` — compare both layers of decoded outputs
-    against ours byte-for-byte, with first-mismatch localised
-    to `(filename, byte_index, expected, got)`.
+  - `diff-decode` — validate a third party's decoded outputs
+    against the **original input** (`frames/[64:6064]` +
+    `inputs/`), i.e. the interop-plan Level 4 pass criterion
+    ("Decoded data matches original input exactly"), with
+    first-mismatch localised to `(filename, byte_index,
+    expected, got)`.  This is `check-decode`'s comparison
+    applied to a foreign directory — no indirection through
+    our decoder's rendering.  `--vs-pocketsdr` adds an
+    optional secondary diff against the bundled PocketSDR
+    reference decode.
 - `_rebuild_manifest()` excludes generated artefacts (`__pycache__/*.pyc`,
   `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.tox`).  A maintainer
   who has imported the harness modules locally creates `.pyc` files

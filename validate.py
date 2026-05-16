@@ -1470,60 +1470,101 @@ def _verify_decoded_fec(fec_name: str, fec_bytes: bytes, source_frame: str) -> s
 
 
 def cmd_diff_decode(args: argparse.Namespace) -> int:
-    """Compare a directory of decoded outputs against ours, byte-by-byte.
+    """Validate a third party's decoded outputs against the original input.
 
-    Both ``decoded_signal_*.bin`` (channel-symbol, 10 entries, 6000 bytes each)
-    and ``decoded_fec_signal_*.bin`` (post-FEC, 10 entries, 2868 bytes each)
-    are compared.  Both oracles cover all 10 signals under v0.4.0+'s bundled
-    FID-bypass patch.
+    Default — the interoperability-plan **Level 4 pass criterion**
+    ("Decoded data matches original input exactly"): for every signal in
+    SIGNAL_TEST_VECTORS, ``<other_dir>/decoded_signal_*.bin`` is compared
+    byte-for-byte against ``frames/<source>[64:6064]`` (channel-symbol
+    layer) and ``<other_dir>/decoded_fec_signal_*.bin`` against
+    ``inputs/<source>_input.bin`` (post-FEC layer), with first-mismatch
+    localisation.  This is exactly the comparison ``check-decode`` runs on
+    our own reference outputs — applied to a third-party directory, with
+    no indirection through our decoder's rendering.
+
+    With ``--vs-pocketsdr``, additionally diff ``<other_dir>`` against the
+    bundled ``references/pocketsdr-afs/decoded/`` reference (secondary,
+    optional — "do you match our specific decoder's output too").
     """
     other = Path(args.other_dir).resolve()
     if not other.is_dir():
         print(f"ERROR: {other} is not a directory", file=sys.stderr)
         return 2
 
-    failures: list[str] = []
-    chan_matches = 0
-    chan_missing = 0
-    fec_matches = 0
-    fec_missing = 0
-    for signal_filename, _prn, _source_frame in SIGNAL_TEST_VECTORS:
-        # Channel-symbol comparison.
-        chan_name = _decoded_filename_for(signal_filename)
-        chan_err = _diff_one(POCKETSDR_DECODED_DIR / chan_name, other / chan_name, DECODED_FILE_LEN)
-        if chan_err is None:
-            chan_matches += 1
-        elif chan_err == "_missing_":
-            chan_missing += 1
-            failures.append(f"{chan_name}: missing in {other}")
-        else:
-            failures.append(chan_err)
-
-        # Post-FEC comparison (all 10 under v0.4.0+'s FID-bypass patch).
-        fec_name = _decoded_fec_filename_for(signal_filename)
-        fec_err = _diff_one(
-            POCKETSDR_DECODED_DIR / fec_name, other / fec_name, DECODED_FEC_FILE_LEN
-        )
-        if fec_err is None:
-            fec_matches += 1
-        elif fec_err == "_missing_":
-            fec_missing += 1
-            failures.append(f"{fec_name}: missing in {other}")
-        else:
-            failures.append(fec_err)
-
     total = len(SIGNAL_TEST_VECTORS)
-    print(f"Compared {total - chan_missing}/{total} channel outputs (missing: {chan_missing})")
-    print(f"  Channel bit-exact: {chan_matches:>2}/{total}")
-    print(f"Compared {total - fec_missing}/{total} FEC outputs (missing: {fec_missing})")
-    print(f"  Post-FEC bit-exact: {fec_matches:>2}/{total}")
+    chan_ok, chan_missing, fec_ok, fec_missing, failures = _diff_decode_vs_input(other)
+    print("vs original input (frames/ + inputs/) — Level 4 pass criterion:")
+    print(f"  Channel-symbol vs frames/:  {chan_ok:>2}/{total}  (missing: {chan_missing})")
+    print(f"  Post-FEC vs inputs/:        {fec_ok:>2}/{total}  (missing: {fec_missing})")
+
+    if args.vs_pocketsdr:
+        ps_chan, ps_fec, secondary = _diff_decode_vs_pocketsdr(other)
+        print("\nvs PocketSDR reference decode (secondary):")
+        print(f"  Channel-symbol: {ps_chan:>2}/{total}")
+        print(f"  Post-FEC:       {ps_fec:>2}/{total}")
+        failures = failures + secondary
+
     if failures:
-        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        print(f"\n{len(failures)} difference(s) (first 10):", file=sys.stderr)
         for msg in failures[:10]:
             print(f"  {msg}", file=sys.stderr)
         return 1
-    print("\nOK — bit-exact match.")
+    print("\nOK — decoded data matches original input exactly.")
     return 0
+
+
+def _diff_decode_vs_input(other: Path) -> tuple[int, int, int, int, list[str]]:
+    """Validate <other> against frames/+inputs/ (the Level 4 pass criterion).
+
+    Returns (chan_ok, chan_missing, fec_ok, fec_missing, failures).
+    """
+    failures: list[str] = []
+    chan_ok = chan_missing = fec_ok = fec_missing = 0
+    for signal_filename, _prn, source_frame in SIGNAL_TEST_VECTORS:
+        chan_name = _decoded_filename_for(signal_filename)
+        chan_path = other / chan_name
+        if not chan_path.exists():
+            chan_missing += 1
+            failures.append(f"{chan_name}: missing in {other}")
+        elif (e := _verify_decoded_chan(chan_name, chan_path.read_bytes(), source_frame)) is None:
+            chan_ok += 1
+        else:
+            failures.append(e)
+
+        fec_name = _decoded_fec_filename_for(signal_filename)
+        fec_path = other / fec_name
+        if not fec_path.exists():
+            fec_missing += 1
+            failures.append(f"{fec_name}: missing in {other}")
+        elif (e := _verify_decoded_fec(fec_name, fec_path.read_bytes(), source_frame)) is None:
+            fec_ok += 1
+        else:
+            failures.append(e)
+    return chan_ok, chan_missing, fec_ok, fec_missing, failures
+
+
+def _diff_decode_vs_pocketsdr(other: Path) -> tuple[int, int, list[str]]:
+    """Secondary diff of <other> against the bundled PocketSDR reference.
+
+    Returns (chan_matches, fec_matches, failures).  Missing files are not
+    re-reported here — the primary pass already flags them.
+    """
+    failures: list[str] = []
+    ps_chan = ps_fec = 0
+    for signal_filename, _prn, _sf in SIGNAL_TEST_VECTORS:
+        cn = _decoded_filename_for(signal_filename)
+        fn = _decoded_fec_filename_for(signal_filename)
+        ce = _diff_one(POCKETSDR_DECODED_DIR / cn, other / cn, DECODED_FILE_LEN)
+        fe = _diff_one(POCKETSDR_DECODED_DIR / fn, other / fn, DECODED_FEC_FILE_LEN)
+        if ce is None:
+            ps_chan += 1
+        elif ce != "_missing_":
+            failures.append(ce)
+        if fe is None:
+            ps_fec += 1
+        elif fe != "_missing_":
+            failures.append(fe)
+    return ps_chan, ps_fec, failures
 
 
 def _diff_one(ours_path: Path, their_path: Path, expected_len: int) -> str | None:
@@ -1805,11 +1846,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p_diff_decode = sub.add_parser(
         "diff-decode",
-        help="Compare a directory of decoded outputs (decoded_signal_*.bin) against ours.",
+        help="Validate a third party's decoded outputs against the original input "
+        "(frames/ + inputs/) — the Level 4 pass criterion.",
     )
     p_diff_decode.add_argument(
         "other_dir",
-        help="Directory containing decoded_signal_*.bin files to compare against ours.",
+        help="Directory of decoded_signal_*.bin / decoded_fec_signal_*.bin to validate.",
+    )
+    p_diff_decode.add_argument(
+        "--vs-pocketsdr",
+        action="store_true",
+        help="Also diff against the bundled PocketSDR reference decode (secondary).",
     )
     p_diff_decode.set_defaults(func=cmd_diff_decode)
 

@@ -337,6 +337,10 @@ python validate.py diff         /path/to/your/codes/
 python validate.py diff-frames  /path/to/your/frames/
 python validate.py diff-inputs  /path/to/your/inputs/
 python validate.py diff-signals /path/to/your/signals/
+
+# diff-decode validates your decoded output against the original input
+# (frames/ + inputs/) — the Level 4 pass criterion itself, not a diff
+# against our decoder.  --vs-pocketsdr adds an optional secondary diff.
 python validate.py diff-decode  /path/to/your/decoded/
 
 # Re-hash everything to confirm the distribution is intact.
