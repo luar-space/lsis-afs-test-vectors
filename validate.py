@@ -1416,8 +1416,18 @@ def cmd_check_decode(_args: argparse.Namespace | None = None) -> int:
     return 0
 
 
-def _verify_decoded_chan(decoded_name: str, decoded_bytes: bytes, source_frame: str) -> str | None:
-    """Validate one decoded_signal_*.bin file. Returns error str or None."""
+def _verify_decoded_chan(
+    decoded_name: str,
+    decoded_bytes: bytes,
+    source_frame: str,
+    frames_dir: Path = FRAMES_DIR,
+) -> str | None:
+    """Validate one decoded_signal_*.bin file. Returns error str or None.
+
+    ``frames_dir`` defaults to the bundled ``frames/``; ``diff-decode
+    --reference`` overrides it so the channel truth can live in an agreed
+    external reference set (check-decode keeps the default).
+    """
     if len(decoded_bytes) != DECODED_FILE_LEN:
         return f"{decoded_name}: {len(decoded_bytes)} bytes, expected {DECODED_FILE_LEN}"
     if any(b not in (0, 1) for b in decoded_bytes):
@@ -1425,7 +1435,7 @@ def _verify_decoded_chan(decoded_name: str, decoded_bytes: bytes, source_frame: 
         return (
             f"{decoded_name}: non-{{0,1}} byte at offset {bad_idx} (value {decoded_bytes[bad_idx]})"
         )
-    frame_bytes = (FRAMES_DIR / source_frame).read_bytes()
+    frame_bytes = (frames_dir / source_frame).read_bytes()
     if len(frame_bytes) != FRAME_FILE_LEN:
         return (
             f"{decoded_name}: companion {source_frame} is "
@@ -1441,14 +1451,24 @@ def _verify_decoded_chan(decoded_name: str, decoded_bytes: bytes, source_frame: 
     )
 
 
-def _verify_decoded_fec(fec_name: str, fec_bytes: bytes, source_frame: str) -> str | None:
-    """Validate one decoded_fec_signal_*.bin file. Returns error str or None."""
+def _verify_decoded_fec(
+    fec_name: str,
+    fec_bytes: bytes,
+    source_frame: str,
+    inputs_dir: Path = INPUTS_DIR,
+) -> str | None:
+    """Validate one decoded_fec_signal_*.bin file. Returns error str or None.
+
+    ``inputs_dir`` defaults to the bundled ``inputs/``; ``diff-decode
+    --reference`` overrides it so the post-FEC truth can live in an
+    agreed external reference set (check-decode keeps the default).
+    """
     if len(fec_bytes) != DECODED_FEC_FILE_LEN:
         return f"{fec_name}: {len(fec_bytes)} bytes, expected {DECODED_FEC_FILE_LEN}"
     if any(b not in (0, 1) for b in fec_bytes):
         bad_idx = next(i for i, b in enumerate(fec_bytes) if b not in (0, 1))
         return f"{fec_name}: non-{{0,1}} byte at offset {bad_idx} (value {fec_bytes[bad_idx]})"
-    input_path = INPUTS_DIR / _input_filename_for(source_frame)
+    input_path = inputs_dir / _input_filename_for(source_frame)
     if not input_path.exists():
         return f"{fec_name}: companion {input_path.name} missing under inputs/"
     expected = input_path.read_bytes()
@@ -1499,26 +1519,27 @@ def cmd_diff_decode(args: argparse.Namespace) -> int:
         print(f"ERROR: {other} is not a directory", file=sys.stderr)
         return 2
 
-    total = len(SIGNAL_TEST_VECTORS)
-    chan_ok, chan_absent, fec_ok, fec_missing, failures = _diff_decode_vs_input(other)
-    print("vs original input — Level 4 pass criterion:")
-    print(f"  Post-FEC vs inputs/    (required):  {fec_ok:>2}/{total}  (missing: {fec_missing})")
-    chan_provided = total - chan_absent
-    if chan_provided == 0:
-        print("  Channel-symbol vs frames/ (optional):  not provided — fine")
+    if args.reference is not None:
+        ref = Path(args.reference).resolve()
+        frames_dir, inputs_dir = ref / "frames", ref / "inputs"
+        if not frames_dir.is_dir() or not inputs_dir.is_dir():
+            print(
+                f"ERROR: --reference {ref} must contain frames/ and inputs/",
+                file=sys.stderr,
+            )
+            return 2
     else:
-        print(
-            f"  Channel-symbol vs frames/ (optional):  {chan_ok:>2}/{chan_provided} provided"
-            f"  ({chan_absent} not provided)"
-        )
+        ref, frames_dir, inputs_dir = REPO_ROOT, FRAMES_DIR, INPUTS_DIR
 
-    if args.vs_pocketsdr:
-        ps_chan, ps_fec, secondary = _diff_decode_vs_pocketsdr(other)
-        print("\nvs PocketSDR reference decode (secondary):")
-        print(f"  Channel-symbol: {ps_chan:>2}/{total}")
-        print(f"  Post-FEC:       {ps_fec:>2}/{total}")
-        failures = failures + secondary
+    records = _diff_decode_vs_input(other, frames_dir, inputs_dir)
+    secondary = _diff_decode_vs_pocketsdr(other) if args.vs_pocketsdr else None
+    failures = _diff_decode_failures(records, secondary)
 
+    if args.json:
+        print(json.dumps(_diff_decode_json(other, ref, records, secondary), indent=2))
+        return 1 if failures else 0
+
+    _diff_decode_print_human(records, secondary)
     if failures:
         print(f"\n{len(failures)} difference(s) (first 10):", file=sys.stderr)
         for msg in failures[:10]:
@@ -1528,7 +1549,9 @@ def cmd_diff_decode(args: argparse.Namespace) -> int:
     return 0
 
 
-def _diff_decode_vs_input(other: Path) -> tuple[int, int, int, int, list[str]]:
+def _diff_decode_vs_input(
+    other: Path, frames_dir: Path, inputs_dir: Path
+) -> list[dict[str, object]]:
     """Validate <other> against frames/+inputs/ (the Level 4 pass criterion).
 
     Post-FEC (vs ``inputs/``) is **required** — it is the pass criterion,
@@ -1536,33 +1559,144 @@ def _diff_decode_vs_input(other: Path) -> tuple[int, int, int, int, list[str]]:
     ``frames/[64:6064]``) is an **optional diagnostic** — an absent file
     is not a failure, but a present-but-wrong one still is.
 
-    Returns (chan_ok, chan_absent, fec_ok, fec_missing, failures).
+    Returns one record per signal:
+    ``{"signal", "post_fec": {status, detail}, "channel": {status, detail}}``
+    where status ∈ {pass, fail, missing} (post_fec) / {pass, fail, absent}
+    (channel).
     """
-    failures: list[str] = []
-    chan_ok = chan_absent = fec_ok = fec_missing = 0
+    records: list[dict[str, object]] = []
     for signal_filename, _prn, source_frame in SIGNAL_TEST_VECTORS:
         chan_name = _decoded_filename_for(signal_filename)
         chan_path = other / chan_name
         if not chan_path.exists():
-            chan_absent += 1  # optional layer — absence is not a failure
-        elif (e := _verify_decoded_chan(chan_name, chan_path.read_bytes(), source_frame)) is None:
-            chan_ok += 1
+            channel = {"status": "absent", "detail": None}
+        elif (
+            e := _verify_decoded_chan(chan_name, chan_path.read_bytes(), source_frame, frames_dir)
+        ) is None:
+            channel = {"status": "pass", "detail": None}
         else:
-            failures.append(e)  # present but wrong still fails
+            channel = {"status": "fail", "detail": e}
 
         fec_name = _decoded_fec_filename_for(signal_filename)
         fec_path = other / fec_name
         if not fec_path.exists():
-            fec_missing += 1
-            failures.append(
-                f"{fec_name}: missing in {other} "
-                "(required — post-FEC vs inputs/ is the Level 4 pass criterion)"
-            )
-        elif (e := _verify_decoded_fec(fec_name, fec_path.read_bytes(), source_frame)) is None:
-            fec_ok += 1
+            post_fec = {
+                "status": "missing",
+                "detail": f"{fec_name}: missing in {other} "
+                "(required — post-FEC vs inputs/ is the Level 4 pass criterion)",
+            }
+        elif (
+            e := _verify_decoded_fec(fec_name, fec_path.read_bytes(), source_frame, inputs_dir)
+        ) is None:
+            post_fec = {"status": "pass", "detail": None}
         else:
-            failures.append(e)
-    return chan_ok, chan_absent, fec_ok, fec_missing, failures
+            post_fec = {"status": "fail", "detail": e}
+
+        records.append({"signal": signal_filename, "post_fec": post_fec, "channel": channel})
+    return records
+
+
+def _diff_decode_failures(
+    records: list[dict[str, object]], secondary: tuple[int, int, list[str]] | None
+) -> list[str]:
+    """Collect blocking messages: any post-FEC non-pass + any channel fail."""
+    failures: list[str] = []
+    for r in records:
+        pf, ch = r["post_fec"], r["channel"]  # type: ignore[index]
+        if pf["status"] != "pass":  # type: ignore[index]
+            failures.append(pf["detail"])  # type: ignore[index,arg-type]
+        if ch["status"] == "fail":  # type: ignore[index]
+            failures.append(ch["detail"])  # type: ignore[index,arg-type]
+    if secondary is not None:
+        failures.extend(secondary[2])
+    return failures
+
+
+def _diff_decode_counts(records: list[dict[str, object]]) -> dict[str, int]:
+    """Aggregate per-status tallies from the per-signal records."""
+
+    def n(layer: str, status: str) -> int:
+        return sum(1 for r in records if r[layer]["status"] == status)  # type: ignore[index]
+
+    return {
+        "fec_pass": n("post_fec", "pass"),
+        "fec_fail": n("post_fec", "fail"),
+        "fec_missing": n("post_fec", "missing"),
+        "chan_pass": n("channel", "pass"),
+        "chan_fail": n("channel", "fail"),
+        "chan_absent": n("channel", "absent"),
+    }
+
+
+def _diff_decode_print_human(
+    records: list[dict[str, object]], secondary: tuple[int, int, list[str]] | None
+) -> None:
+    """Print the console summary (unchanged shape from earlier versions)."""
+    total = len(records)
+    c = _diff_decode_counts(records)
+    print("vs original input — Level 4 pass criterion:")
+    print(
+        f"  Post-FEC vs inputs/    (required):  {c['fec_pass']:>2}/{total}  "
+        f"(missing: {c['fec_missing']})"
+    )
+    chan_provided = c["chan_pass"] + c["chan_fail"]
+    if chan_provided == 0:
+        print("  Channel-symbol vs frames/ (optional):  not provided — fine")
+    else:
+        print(
+            f"  Channel-symbol vs frames/ (optional):  {c['chan_pass']:>2}/{chan_provided} "
+            f"provided  ({c['chan_absent']} not provided)"
+        )
+    if secondary is not None:
+        ps_chan, ps_fec, _ = secondary
+        print("\nvs PocketSDR reference decode (secondary):")
+        print(f"  Channel-symbol: {ps_chan:>2}/{total}")
+        print(f"  Post-FEC:       {ps_fec:>2}/{total}")
+
+
+def _diff_decode_json(
+    other: Path,
+    ref: Path,
+    records: list[dict[str, object]],
+    secondary: tuple[int, int, list[str]] | None,
+) -> dict[str, object]:
+    """One round-robin matrix cell, machine-readable (see INTEROP-ROUNDROBIN.md)."""
+    total = len(records)
+    c = _diff_decode_counts(records)
+    verdict = "PASS" if not _diff_decode_failures(records, secondary) else "FAIL"
+    out: dict[str, object] = {
+        "tool": "lsis-afs-validate diff-decode",
+        "criterion": "interoperability.pdf Level 4 — decoded data matches original input exactly",
+        "candidate": str(other),
+        "reference": str(ref),
+        "signals": records,
+        "summary": {
+            "post_fec": {
+                "required": True,
+                "pass": c["fec_pass"],
+                "fail": c["fec_fail"],
+                "missing": c["fec_missing"],
+                "total": total,
+            },
+            "channel": {
+                "required": False,
+                "pass": c["chan_pass"],
+                "fail": c["chan_fail"],
+                "absent": c["chan_absent"],
+                "total": total,
+            },
+            "verdict": verdict,
+        },
+    }
+    if secondary is not None:
+        ps_chan, ps_fec, ps_fail = secondary
+        out["pocketsdr_secondary"] = {
+            "channel_pass": ps_chan,
+            "post_fec_pass": ps_fec,
+            "total": total,
+            "failures": ps_fail,
+        }
+    return out
 
 
 def _diff_decode_vs_pocketsdr(other: Path) -> tuple[int, int, list[str]]:
@@ -1874,6 +2008,18 @@ def main(argv: list[str] | None = None) -> int:
     p_diff_decode.add_argument(
         "other_dir",
         help="Directory of decoded_signal_*.bin / decoded_fec_signal_*.bin to validate.",
+    )
+    p_diff_decode.add_argument(
+        "--reference",
+        metavar="DIR",
+        default=None,
+        help="Reference set to validate against (must contain frames/ and inputs/). "
+        "Default: this repo. Use an agreed external set for the workshop round-robin.",
+    )
+    p_diff_decode.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one machine-readable matrix cell as JSON (see INTEROP-ROUNDROBIN.md).",
     )
     p_diff_decode.add_argument(
         "--vs-pocketsdr",

@@ -874,6 +874,76 @@ def test_diff_decode_detects_fec_mutation(tmp_path: Path) -> None:
     assert "decoded_fec_signal_message_3_12s" in combined
 
 
+def _copy_decoded(dst: Path, *, prefix: str = "decoded_") -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    for path in (REPO_ROOT / "references/pocketsdr-afs/decoded").iterdir():
+        if path.is_file() and path.name.startswith(prefix):
+            (dst / path.name).write_bytes(path.read_bytes())
+
+
+def test_diff_decode_json_pass(tmp_path: Path) -> None:
+    """--json emits one well-formed matrix cell with verdict PASS."""
+    other = tmp_path / "out"
+    _copy_decoded(other)
+    result = run("diff-decode", str(other), "--json")
+    assert result.returncode == 0, result.stderr
+    cell = json.loads(result.stdout)
+    assert cell["summary"]["verdict"] == "PASS"
+    assert cell["summary"]["post_fec"] == {
+        "required": True,
+        "pass": 10,
+        "fail": 0,
+        "missing": 0,
+        "total": 10,
+    }
+    assert len(cell["signals"]) == 10
+    assert cell["signals"][0]["post_fec"]["status"] == "pass"
+
+
+def test_diff_decode_json_fail(tmp_path: Path) -> None:
+    """A mutated post-FEC file → JSON verdict FAIL and exit 1."""
+    other = tmp_path / "out"
+    _copy_decoded(other)
+    target = other / "decoded_fec_signal_message_2_12s.bin"
+    raw = bytearray(target.read_bytes())
+    raw[10] ^= 1
+    target.write_bytes(bytes(raw))
+    result = run("diff-decode", str(other), "--json")
+    assert result.returncode == 1
+    cell = json.loads(result.stdout)
+    assert cell["summary"]["verdict"] == "FAIL"
+    bad = next(s for s in cell["signals"] if s["signal"] == "signal_message_2_12s.iq.gz")
+    assert bad["post_fec"]["status"] == "fail"
+    assert "first FEC byte mismatch" in bad["post_fec"]["detail"]
+
+
+def test_diff_decode_reference_dir(tmp_path: Path) -> None:
+    """--reference points the truth at an external frames/+inputs/ set."""
+    ref = tmp_path / "ref"
+    (ref / "frames").mkdir(parents=True)
+    (ref / "inputs").mkdir(parents=True)
+    for f in (REPO_ROOT / "frames").iterdir():
+        (ref / "frames" / f.name).write_bytes(f.read_bytes())
+    for f in (REPO_ROOT / "inputs").iterdir():
+        (ref / "inputs" / f.name).write_bytes(f.read_bytes())
+    other = tmp_path / "out"
+    _copy_decoded(other, prefix="decoded_fec_")  # post-FEC only
+    result = run("diff-decode", str(other), "--reference", str(ref))
+    assert result.returncode == 0, result.stderr
+    assert "OK — decoded data matches original input exactly" in result.stdout
+
+
+def test_diff_decode_reference_bad_layout(tmp_path: Path) -> None:
+    """--reference without frames/+inputs/ is a usage error (exit 2)."""
+    empty = tmp_path / "noref"
+    empty.mkdir()
+    other = tmp_path / "out"
+    _copy_decoded(other)
+    result = run("diff-decode", str(other), "--reference", str(empty))
+    assert result.returncode == 2
+    assert "must contain frames/ and inputs/" in result.stderr
+
+
 def test_check_decode_catches_size_mutation(tmp_path: Path) -> None:
     """check-decode must reject decoded files that are not the expected size."""
     target = REPO_ROOT / "references/pocketsdr-afs/decoded/decoded_signal_message_1_12s.bin"

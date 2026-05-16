@@ -122,7 +122,13 @@ canonical-input layer (vs `inputs/`) byte-for-byte.
     is fine (most receivers don't expose the pre-deinterleave
     tap), present-but-wrong still fails.  `--vs-pocketsdr`
     adds an optional secondary diff against the bundled
-    PocketSDR reference decode.
+    PocketSDR reference decode.  `--reference DIR` validates
+    against an agreed external truth set (`DIR/frames` +
+    `DIR/inputs`) instead of the bundled one; `--json` emits
+    one machine-readable round-robin matrix cell.  The
+    cross-decoding round-robin contract is specified (as a
+    proposal pending interop-plan Phase-1 agreement) in
+    `INTEROP-ROUNDROBIN.md`.
 - `_rebuild_manifest()` excludes generated artefacts (`__pycache__/*.pyc`,
   `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `.tox`).  A maintainer
   who has imported the harness modules locally creates `.pyc` files

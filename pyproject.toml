@@ -45,6 +45,7 @@ only-include = [
     "README.md",
     "CORRECTNESS.md",
     "CHANGELOG.md",
+    "INTEROP-ROUNDROBIN.md",
     "CITATION.cff",
 ]
 
@@ -60,6 +61,7 @@ only-include = [
     "README.md",
     "CORRECTNESS.md",
     "CHANGELOG.md",
+    "INTEROP-ROUNDROBIN.md",
     "CITATION.cff",
     "LICENSE",
     "pyproject.toml",
