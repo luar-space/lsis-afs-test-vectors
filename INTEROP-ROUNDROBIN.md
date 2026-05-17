@@ -149,7 +149,7 @@ one `--json` invocation per (signal-set, their-decoder) pair and the cells
 are collected — e.g. `matrix[signal_owner][decoder_team] = summary.verdict`,
 with `signals[]` giving per-vector and first-mismatch detail for triage.
 
-## Pass definition and honesty
+## Pass definition
 
 A green cell means: **every post-FEC output equals the original input
 exactly, on every signal attempted, and no provided channel dump is wrong.**
