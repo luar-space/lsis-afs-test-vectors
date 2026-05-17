@@ -16,3 +16,7 @@ dist/
 
 # Claude Code session state — per-user, never tracked.
 .claude/
+
+# Local announcement / message-board drafts — scratch only, never tracked.
+message.txt
+message*.txt
