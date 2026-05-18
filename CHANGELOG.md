@@ -77,9 +77,12 @@ The shipped JSONs reflect this faithfully:
   Each JSON's top-level keys (`version`, `timestamp`, `frame_id`,
   `subframe1`, `subframe2`, `subframe3`, `subframe4`,
   `time_of_transmission`) follow the interop-PDF p.3-4 template
-  literally.  The shipped `timestamp` is pinned to the LSIS V1.0
-  publication date (2025-01-29T00:00:00+00:00) for byte-stable output
-  across rebuilds.
+  literally.  V1.0-TBW regions (`ced`, `health`, `time_conversions`,
+  `subframe{3,4}.data`) are emitted in the strict interop-PDF page-4
+  shape — empty objects, scalar `health: 0` — with the raw bit-slices
+  preserved in `_`-prefixed disclosure siblings.  The shipped
+  `timestamp` is pinned to the LSIS V1.0 publication date
+  (2025-01-29T00:00:00Z) for byte-stable output across rebuilds.
 - Two new `validate.py` subcommands:
   - **`check-parsed`** (~290 LoC, stdlib-only): verifies the shipped
     JSONs structurally and against ground truth.  Performs seven
@@ -124,7 +127,7 @@ The shipped JSONs reflect this faithfully:
   flips with file + key localisation; help-coverage parametrize
   extended for both new subcommands; manifest covers every shipped
   parsed file; shipped JSONs all carry the byte-stable
-  `2025-01-29T00:00:00+00:00` timestamp.
+  `2025-01-29T00:00:00Z` timestamp.
 
 ### Producer
 

@@ -1,9 +1,9 @@
 {
   "version": "1.0",
-  "timestamp": "2025-01-29T00:00:00+00:00",
+  "timestamp": "2025-01-29T00:00:00Z",
   "frame_id": "frame_message_5",
-  "implementation": "LunaLink",
-  "lsis_version": "V1.0 (29 January 2025)",
+  "_implementation": "LunaLink",
+  "_lsis_version": "V1.0 (29 January 2025)",
   "subframe1": {
     "fid": 0,
     "toi": 0,
@@ -12,21 +12,18 @@
   "subframe2": {
     "wn": 5434,
     "itow": 47,
-    "ced": {
-      "_status": "tbw",
-      "_lsis_ref": "LSIS-TBW-2006 (\u00a72.5.3)",
-      "_note": "CED bit-level layout TBW per LSIS V1.0. Raw bit-slice spans SB2 bits 22..1149 (full TBW region). See _data_raw_hex for byte-equal cross-impl comparison."
-    },
-    "health": {
-      "_status": "tbw",
-      "_lsis_ref": "LSIS-TBW-2005 (\u00a72.5.2)",
-      "_note": "Health bit-level layout TBW per LSIS V1.0."
-    },
-    "time_conversions": {
-      "_status": "tbw",
-      "_lsis_ref": "LSIS-TBW-2012 (\u00a72.5.20)",
-      "_note": "Time conversion fields TBW per LSIS V1.0."
-    },
+    "ced": {},
+    "_ced_status": "tbw",
+    "_ced_lsis_ref": "LSIS-TBW-2006 (\u00a72.5.3)",
+    "_ced_note": "CED bit-level layout TBW per LSIS V1.0; empty object emitted to match interop-PDF Parsed Data Export Format example shape (interop-PDF page 4 shows concrete fields as aspirational; V1.0 has not yet pinned the layout). See _tbw_region_raw_hex for byte-equal cross-impl comparison of the full SB2 TBW region (bits 22..1149).",
+    "health": 0,
+    "_health_status": "tbw",
+    "_health_lsis_ref": "LSIS-TBW-2005 (\u00a72.5.2)",
+    "_health_note": "Health bit-level layout TBW per LSIS V1.0; scalar 0 emitted to match interop-PDF example shape.",
+    "time_conversions": {},
+    "_time_conversions_status": "tbw",
+    "_time_conversions_lsis_ref": "LSIS-TBW-2012 (\u00a72.5.20)",
+    "_time_conversions_note": "Time conversion fields TBW per LSIS V1.0; empty object emitted to match interop-PDF example shape.",
     "_spare_bits_hex": "55555540",
     "_spare_bits_lsis_ref": "LSIS-FID0-550 (LSIS-TBC-2022)",
     "_tbw_region_raw_hex": "95d53add27669f69781526e9df43f2874e0cdc57e971ed13aea61e1955b5e8a075add80f4e2b43a239fc866950fd47445225386c9a63f5c1b440667cc08cceb141c75ec7c25581b5796d0382647ffe0c51fd12af9cf733297e079faf6b60bf9174c9d72e97e6e27d5ca00e2a426395890ac4be6f1f331da332f02e68cfa8e2dd13d99216647b227162c59964d4",
@@ -44,15 +41,14 @@
     "_type_status": "lunalink-resolved",
     "_type_lsis_ref": "LSIS-TBC-2023 (\u00a72.4.3.1.7 Table 19) \u2014 V1.0 declares '4 or 6 bits'; LunaLink uses 6",
     "_type_width_bits": 6,
-    "data": {
-      "_status": "tbw",
-      "_lsis_ref": "\u00a72.5.4/2.5.6/2.5.10/2.5.14/2.5.21/etc \u2014 content per type",
-      "_bit_range_in_data": [
-        6,
-        845
-      ],
-      "raw_hex": "3e743592a63bcf6789d8239bc9ffbf8a0dc5ead1a7f02955a7e901f365c5663cb5f21520835a3295347eb85ef999a38f89c6a7f0e19390186c44cc8136b48791366c3a50c6da4bd5526afc53783879b55188c2048f5969e49cfe4d6054537ec843d8bdcf72d9fb97fa"
-    },
+    "data": {},
+    "_data_status": "tbw",
+    "_data_after_type_lsis_ref": "Table 19 \u2014 per-type content layouts TBW per LSIS V1.0 \u00a72.5",
+    "_data_after_type_bit_range": [
+      6,
+      845
+    ],
+    "_data_after_type_raw_hex": "3e743592a63bcf6789d8239bc9ffbf8a0dc5ead1a7f02955a7e901f365c5663cb5f21520835a3295347eb85ef999a38f89c6a7f0e19390186c44cc8136b48791366c3a50c6da4bd5526afc53783879b55188c2048f5969e49cfe4d6054537ec843d8bdcf72d9fb97fa",
     "_data_raw_hex": "68f9d0d64a98ef3d9e27608e6f27fefe283717ab469fc0a5569fa407cd971598f2d7c854820d68ca54d1fae17be6668e3e271a9fc3864e4061b1133204dad21e44d9b0e9431b692f5549abf14de0e1e6d5462308123d65a79273f93581514dfb210f62f73dcb67ee5fe8",
     "_data_lsis_ref": "Table 19 (846 data bits + 24-bit CRC)",
     "_crc24q_ok": true,
@@ -63,15 +59,14 @@
     "_type_status": "lunalink-resolved",
     "_type_lsis_ref": "LSIS-TBC-2024 (\u00a72.4.3.1.8 Table 20) \u2014 V1.0 declares '4 or 6 bits'; LunaLink uses 6",
     "_type_width_bits": 6,
-    "data": {
-      "_status": "tbw",
-      "_lsis_ref": "\u00a72.5.1 (MSG-G1 LunaNet Network Access \u2014 TBW)",
-      "_bit_range_in_data": [
-        6,
-        845
-      ],
-      "raw_hex": "46856c3c4d319c622b7da751c3688a672b08f1592f845c9b8a0de7c973e896d04153009dee3ba123d6d946002483fa76270c6af50b6340c5f5331fe72a3d3efb4ed0e51e946360b0792467b7b345bd124d0fdf873cda5b8bc97ffcf4d475e43f14bdd8a652481253cd"
-    },
+    "data": {},
+    "_data_status": "tbw",
+    "_data_after_type_lsis_ref": "Table 20 \u2014 per-type content layouts TBW per LSIS V1.0 \u00a72.5",
+    "_data_after_type_bit_range": [
+      6,
+      845
+    ],
+    "_data_after_type_raw_hex": "46856c3c4d319c622b7da751c3688a672b08f1592f845c9b8a0de7c973e896d04153009dee3ba123d6d946002483fa76270c6af50b6340c5f5331fe72a3d3efb4ed0e51e946360b0792467b7b345bd124d0fdf873cda5b8bc97ffcf4d475e43f14bdd8a652481253cd",
     "_data_raw_hex": "311a15b0f134c67188adf69d470da2299cac23c564be11726e28379f25cfa25b41054c0277b8ee848f5b651800920fe9d89c31abd42d8d0317d4cc7f9ca8f4fbed3b43947a518d82c1e4919edecd16f449343f7e1cf3696e2f25fff3d351d790fc52f762994920494f34",
     "_data_lsis_ref": "Table 20 (846 data bits + 24-bit CRC)",
     "_crc24q_ok": true,

@@ -1234,13 +1234,13 @@ p.3-4 template:
 ```json
 {
   "version": "1.0",
-  "timestamp": "2025-01-29T00:00:00+00:00",
+  "timestamp": "2025-01-29T00:00:00Z",
   "frame_id": "frame_message_1",
   "subframe1": {"fid": 0, "toi": 0, ...},
-  "subframe2": {"wn": 0, "itow": 0, "ced": {...}, "health": {...},
-                "time_conversions": {...}, ...},
-  "subframe3": {"type": 0, "data": {...}, ...},
-  "subframe4": {"type": 0, "data": {...}, ...},
+  "subframe2": {"wn": 0, "itow": 0, "ced": {}, "health": 0,
+                "time_conversions": {}, ...},
+  "subframe3": {"type": 0, "data": {}, ...},
+  "subframe4": {"type": 0, "data": {}, ...},
   "time_of_transmission": 0.0,
   ...
 }
@@ -1248,13 +1248,16 @@ p.3-4 template:
 
 Top-level keys (`version`, `timestamp`, `frame_id`, `subframe1`,
 `subframe2`, `subframe3`, `subframe4`, `time_of_transmission`) match
-the spec template literally.  Within each subframe, keys are
-underscore-prefixed (`_status`, `_lsis_ref`, `_data_raw_hex`,
-`_crc24q_ok`) when they carry LunaLink-specific metadata or disclosure
-markers; non-underscore keys are spec-shaped and load-bearing.
+the spec template literally.  V1.0-TBW regions (`ced`, `health`,
+`time_conversions`, `subframe{3,4}.data`) are emitted as empty objects
+(or scalar `0` for `health`) to match the interop-PDF page-4 example
+shape exactly; keys are underscore-prefixed (`_ced_status`,
+`_lsis_ref`, `_data_raw_hex`, `_crc24q_ok`) when they carry
+LunaLink-specific metadata or disclosure markers; non-underscore keys
+are spec-shaped and load-bearing.
 
 The shipped `timestamp` is pinned to the LSIS V1.0 publication date
-(`2025-01-29T00:00:00+00:00`) for byte-stable output across rebuilds —
+(`2025-01-29T00:00:00Z`) for byte-stable output across rebuilds —
 consistent with the L2 frame-header timestamp and L4 manifest stability
 policy.
 

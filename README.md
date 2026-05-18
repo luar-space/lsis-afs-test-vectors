@@ -332,12 +332,12 @@ shape literally:
 ```json
 {
   "version": "1.0",
-  "timestamp": "2025-01-29T00:00:00+00:00",
+  "timestamp": "2025-01-29T00:00:00Z",
   "frame_id": "frame_message_1",
   "subframe1": {"fid": 0, "toi": 0, ...},
-  "subframe2": {"wn": 0, "itow": 0, "ced": {...}, "health": {...}, ...},
-  "subframe3": {"type": 0, "data": {...}, ...},
-  "subframe4": {"type": 0, "data": {...}, ...},
+  "subframe2": {"wn": 0, "itow": 0, "ced": {}, "health": 0, ...},
+  "subframe3": {"type": 0, "data": {}, ...},
+  "subframe4": {"type": 0, "data": {}, ...},
   "time_of_transmission": 0.0,
   ...
 }

@@ -1201,7 +1201,7 @@ def test_parsed_files_have_expected_top_level_shape() -> None:
 
 def test_parsed_files_have_byte_stable_timestamp() -> None:
     """Shipped parsed_*.json all carry the LSIS V1.0 publication-date timestamp."""
-    expected = "2025-01-29T00:00:00+00:00"
+    expected = "2025-01-29T00:00:00Z"
     for parsed_filename, *_ in validate.PARSED_TEST_VECTORS:
         path = REPO_ROOT / "parsed" / parsed_filename
         doc = json.loads(path.read_text())
