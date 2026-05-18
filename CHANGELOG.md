@@ -22,7 +22,7 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
 
-## [0.5.0] — 2026-05-06
+## [0.5.0] — 2026-05-18
 
 Fifth public release — **Level 5: Message Parsing Interoperability** vectors.
 Closes the message-parsing layer that completes the staged interoperability
@@ -136,9 +136,17 @@ The shipped JSONs are produced by the LuarSpace reference implementation
 orchestrator lives in the lunalink repo at
 `scripts/export_test_vectors_l5.py` and uses lunalink's full RX path
 (sync detect + BCH SB1 + LDPC SB2/SB3/SB4 + CRC verify + parse) on
-each `frames/frame_*.bin`.  The new `export_parsed_json_interop_v1()`
+each `frames/frame_*.bin`.  The `export_parsed_json_interop_v1()`
 emitter assembles the spec-shaped JSON from the resulting `DecodeResult`
 + explicit `parse_sb2/parse_sb3/parse_sb4` calls.
+
+The seven shipped JSONs are byte-for-byte reproducible from the merged
+LunaLink `main` (the interop test-vector producer landed upstream;
+emitter + RX path frozen): re-running the producer over this repo's
+`frames/` regenerates `parsed/` with an identical aggregate SHA-256.
+The strict interop-PDF page-4 shape (empty `ced`/`time_conversions`/
+`subframe{3,4}.data` objects, scalar `health: 0`, `Z`-suffixed
+publication-date `timestamp`) is what that frozen emitter produces.
 
 ### Validation strategy at L5
 
