@@ -1773,7 +1773,9 @@ def _diff_one(ours_path: Path, their_path: Path, expected_len: int) -> str | Non
 # round-trip:
 #
 #   1. JSON schema valid (required fields present, types correct).
-#   2. Spec-range checks (FID 0..3, TOI 0..99, WN 0..8191, ITOW 0..503).
+#   2. Spec-range checks (FID 0..3, TOI 0..99, WN 0..8191, ITOW 0..511
+#      raw 9-bit max — see PARSED_ITOW_RAW_MAX; spec max 503 is exercised
+#      by frame_boundary_max_fields, not enforced as the range ceiling).
 #   3. ToT round-trip: t_F = WN*604800 + ITOW*1200 + TOI*12 + dt_lrt
 #      (with dt_lrt=0 documented in the JSON itself).
 #   4. FID/TOI ground-truth match (we know what we encoded).
