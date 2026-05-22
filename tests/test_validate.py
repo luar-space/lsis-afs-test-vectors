@@ -375,7 +375,7 @@ def test_refresh_without_url_is_helpful() -> None:
 def test_manifest_structure() -> None:
     manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
     assert manifest["version"] == "1.0"
-    assert manifest["levels"] == [1, 2, 3, 4]  # grows as future drops land
+    assert manifest["levels"] == [1, 2, 3, 4, 5]  # grows as future drops land
     assert "oracles" in manifest
     # L1 normative + L1/L2 LANS + L2 structural + L3 structural + L4 PocketSDR-AFS
     assert len(manifest["oracles"]) >= 5
@@ -469,11 +469,13 @@ def test_no_args_shows_help_and_errors() -> None:
         "check-canonical-inputs",
         "check-signals",
         "check-decode",
+        "check-parsed",
         "diff",
         "diff-frames",
         "diff-inputs",
         "diff-signals",
         "diff-decode",
+        "diff-parsed",
         "build-canonical-inputs",
         "verify-manifest",
         "rebuild-manifest",
@@ -498,7 +500,7 @@ def test_rebuild_manifest_is_idempotent(tmp_path: Path) -> None:
     assert verify.returncode == 0, verify.stderr
     # Structural checks on the regenerated file
     after = json.loads((REPO_ROOT / "manifest.json").read_text())
-    assert after["levels"] == [1, 2, 3, 4]
+    assert after["levels"] == [1, 2, 3, 4, 5]
     assert len(after["files"]) >= 700
     # Restore the original manifest so the test has no side-effect on other tests
     (REPO_ROOT / "manifest.json").write_text(before)
@@ -1032,3 +1034,187 @@ def test_fec_outputs_match_inputs_byte_for_byte() -> None:
         assert fec_path.read_bytes() == input_path.read_bytes(), (
             f"{fec_path.name} != {input_path.name}"
         )
+
+
+# ─────────────────────────────── L5 parsed JSONs ───────────────────────────
+
+
+def test_check_parsed_passes() -> None:
+    """check-parsed must report 7/7 passes against shipped parsed/*.json."""
+    result = run("check-parsed")
+    assert result.returncode == 0, result.stderr
+    assert "Parsed-JSON oracle:  7/7" in result.stdout
+    assert "all 7 parsed JSONs pass" in result.stdout
+
+
+def test_diff_parsed_self_is_clean(tmp_path: Path) -> None:
+    """Comparing parsed/ against a copy of itself must report 7/7 field-equal."""
+    other = tmp_path / "parsed-copy"
+    other.mkdir()
+    for path in (REPO_ROOT / "parsed").iterdir():
+        if path.is_file() and path.name.startswith("parsed_"):
+            (other / path.name).write_bytes(path.read_bytes())
+    result = run("diff-parsed", str(other))
+    assert result.returncode == 0, result.stderr
+    assert "Field-equal:  7/7" in result.stdout
+    assert "OK — all spec-shaped fields match" in result.stdout
+
+
+def test_diff_parsed_detects_fid_mutation(tmp_path: Path) -> None:
+    """A flipped FID in any parsed JSON must be reported."""
+    other = tmp_path / "parsed-mutated"
+    other.mkdir()
+    for path in (REPO_ROOT / "parsed").iterdir():
+        if not path.is_file() or not path.name.startswith("parsed_"):
+            continue
+        doc = json.loads(path.read_text())
+        if path.name == "parsed_frame_message_1.json":
+            doc["subframe1"]["fid"] = 1  # was 0
+        (other / path.name).write_text(json.dumps(doc))
+
+    result = run("diff-parsed", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "parsed_frame_message_1.json" in combined
+    assert "subframe1.fid differs" in combined
+
+
+def test_check_parsed_catches_wn_mutation(tmp_path: Path) -> None:
+    """check-parsed must reject a parsed JSON whose WN disagrees with inputs/*."""
+    target = REPO_ROOT / "parsed/parsed_frame_message_1.json"
+    original = target.read_text()
+    try:
+        doc = json.loads(original)
+        doc["subframe2"]["wn"] = 1  # frame_message_1's all-zeros input → expected 0
+        # Keep ToT consistent with the mutated WN so the round-trip check
+        # passes and the WN ground-truth check (vs inputs/*) is the one
+        # that fires.
+        toi = doc["subframe1"]["toi"]
+        itow = doc["subframe2"]["itow"]
+        doc["time_of_transmission"] = float(1 * 604800 + itow * 1200 + toi * 12)
+        target.write_text(json.dumps(doc))
+        result = run("check-parsed")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "parsed_frame_message_1.json" in combined
+        assert "subframe2.wn=1" in combined
+        assert "expected 0" in combined
+    finally:
+        target.write_text(original)
+
+
+def test_check_parsed_catches_tot_mutation(tmp_path: Path) -> None:
+    """check-parsed must reject a parsed JSON whose ToT doesn't match the formula."""
+    target = REPO_ROOT / "parsed/parsed_frame_boundary.json"
+    original = target.read_text()
+    try:
+        doc = json.loads(original)
+        doc["time_of_transmission"] = 12345.6  # arbitrary wrong value
+        target.write_text(json.dumps(doc))
+        result = run("check-parsed")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "parsed_frame_boundary.json" in combined
+        assert "time_of_transmission" in combined
+    finally:
+        target.write_text(original)
+
+
+def test_check_parsed_catches_out_of_range_fid(tmp_path: Path) -> None:
+    """check-parsed must reject FID > 3 (V1.0 Table 13: 2-bit field)."""
+    target = REPO_ROOT / "parsed/parsed_frame_message_1.json"
+    original = target.read_text()
+    try:
+        doc = json.loads(original)
+        doc["subframe1"]["fid"] = 4  # exceeds 2-bit max
+        target.write_text(json.dumps(doc))
+        result = run("check-parsed")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "fid=4 out of spec range" in combined
+    finally:
+        target.write_text(original)
+
+
+def test_check_parsed_catches_missing_required_field(tmp_path: Path) -> None:
+    """check-parsed must report missing required top-level fields."""
+    target = REPO_ROOT / "parsed/parsed_frame_message_1.json"
+    original = target.read_text()
+    try:
+        doc = json.loads(original)
+        del doc["subframe2"]
+        target.write_text(json.dumps(doc))
+        result = run("check-parsed")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "missing top-level keys" in combined
+    finally:
+        target.write_text(original)
+
+
+def test_check_parsed_catches_invalid_json(tmp_path: Path) -> None:
+    """check-parsed must surface JSON parse errors with file name + line."""
+    target = REPO_ROOT / "parsed/parsed_frame_message_1.json"
+    original = target.read_text()
+    try:
+        target.write_text(original.rstrip("}\n") + "}{")  # mangled
+        result = run("check-parsed")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "parsed_frame_message_1.json" in combined
+        assert "invalid JSON" in combined
+    finally:
+        target.write_text(original)
+
+
+def test_diff_parsed_handles_missing_user_dir(tmp_path: Path) -> None:
+    """diff-parsed against an empty dir reports 7/7 missing."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = run("diff-parsed", str(empty))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "missing: 7" in combined
+
+
+def test_parsed_files_have_expected_top_level_shape() -> None:
+    """Every shipped parsed_*.json carries the interop-PDF p.3-4 spec shape."""
+    for parsed_filename, *_ in validate.PARSED_TEST_VECTORS:
+        path = REPO_ROOT / "parsed" / parsed_filename
+        doc = json.loads(path.read_text())
+        for key in (
+            "version",
+            "timestamp",
+            "frame_id",
+            "subframe1",
+            "subframe2",
+            "subframe3",
+            "subframe4",
+            "time_of_transmission",
+        ):
+            assert key in doc, f"{parsed_filename}: missing {key}"
+        assert doc["version"] == "1.0"
+        assert "fid" in doc["subframe1"] and "toi" in doc["subframe1"]
+        assert "wn" in doc["subframe2"] and "itow" in doc["subframe2"]
+        assert "type" in doc["subframe3"] and "type" in doc["subframe4"]
+
+
+def test_parsed_files_have_byte_stable_timestamp() -> None:
+    """Shipped parsed_*.json all carry the LSIS V1.0 publication-date timestamp."""
+    expected = "2025-01-29T00:00:00Z"
+    for parsed_filename, *_ in validate.PARSED_TEST_VECTORS:
+        path = REPO_ROOT / "parsed" / parsed_filename
+        doc = json.loads(path.read_text())
+        assert doc["timestamp"] == expected, (
+            f"{parsed_filename}: timestamp={doc['timestamp']!r}, "
+            f"expected {expected!r} for byte-stable shipped output"
+        )
+
+
+def test_manifest_covers_every_parsed_file() -> None:
+    """Every shipped parsed_*.json must be SHA-pinned in manifest.json."""
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    for parsed_filename, *_ in validate.PARSED_TEST_VECTORS:
+        rel = f"parsed/{parsed_filename}"
+        assert rel in files, f"{rel} missing from manifest"

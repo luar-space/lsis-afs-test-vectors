@@ -15,12 +15,189 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 | 0.2.1     | + canonical pre-encode inputs |
 | 0.2.2     | + Level-2 boundary frame with WN=8191 / ITOW=503 maxima |
 | 0.3.0     | + Level 3 |
-| **0.4.0** | + Level 4 (this release) |
-| 0.5.0     | + Level 5 (feature-complete) |
+| 0.4.0     | + Level 4 |
+| **0.5.0** | + Level 5 (feature-complete; this release) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
+
+## [0.5.0] — 2026-05-18
+
+Fifth public release — **Level 5: Message Parsing Interoperability** vectors.
+Closes the message-parsing layer that completes the staged interoperability
+build-up.  The LunaLink reference implementation runs its full RX path
+(sync detect → BCH(51,8) on SB1 → deinterleave → LDPC(1/2) on SB2/SB3/SB4
+→ CRC-24Q verify → field-level parse) over every shipped L2 frame, and
+emits a JSON document per frame in the
+[`interoperability.pdf`](./references/interoperability.pdf) §"Parsed Data
+Export Format" shape.
+
+### Honesty about LSIS V1.0 TBW regions
+
+LSIS V1.0 (29 January 2025) declares the bit-level layout of CED
+(MSG-G4, §2.5.3 / LSIS-TBW-2006), Health (MSG-G2, §2.5.2 /
+LSIS-TBW-2005), Time Conversions (MSG-G30, §2.5.20 / LSIS-TBW-2012),
+the SF3 type-field width (LSIS-TBC-2023, "4 or 6 bits"), and the SF4
+type-field width (LSIS-TBC-2024, "4 or 6 bits") as TBW or TBC.  Of the
+22 message types listed in V1.0 Table 21, only MSG-G8 (Time of
+Transmission, §2.5.5) carries a complete bit-level specification.
+
+The shipped JSONs reflect this faithfully:
+
+- **V1.0-pinned fields** are emitted as concrete values:
+  - `subframe1.fid`, `subframe1.toi` (V1.0 Tables 13, 14)
+  - `subframe2.wn`, `subframe2.itow` (V1.0 Table 22 + §2.5.5)
+  - `time_of_transmission` per V1.0 §2.5.5 formula
+    `tF = WN·604800 + ITOW·1200 + TOI·12 + dt_lrt` (with `dt_lrt = 0`
+    documented in the JSON itself, since Δt_LRT comes from MSG-G4 which
+    is TBW)
+  - `subframe2._crc24q_ok`, `subframe3._crc24q_ok`, `subframe4._crc24q_ok`
+    per V1.0 §2.4.3.1.3 + Appendix H
+- **V1.0-TBW fields** (CED, Health, Time-Conversions) ship as raw
+  bit-slice hex with explicit `_lsis_ref` markers (`LSIS-TBW-NNNN`
+  citations), so consumers can byte-equal-compare the bit-slices
+  without any implementation having to invent positions V1.0 doesn't
+  pin
+- **V1.0-TBC type-field widths** (SF3, SF4) — LunaLink resolves to
+  6-bit width and surfaces the choice via `_type_status:
+  "lunalink-resolved"` and `_type_lsis_ref:
+  "LSIS-TBC-2023/2024 — V1.0 declares '4 or 6 bits'; LunaLink uses 6"`,
+  so a third-party implementation that resolved to 4-bit can detect
+  the disagreement at `diff-parsed` time
+
+### Added
+
+- `parsed/` — seven shipped Level-5 parsed JSONs (~30 KB total):
+  - `parsed_frame_message_1..5.json` — Test Messages 1-5 (TC1)
+  - `parsed_frame_boundary.json` — TC4 with FID=3, TOI=99 maxima
+  - `parsed_frame_boundary_max_fields.json` — TC4 with WN=8191,
+    ITOW=503 SB2-field maxima
+
+  Each JSON's top-level keys (`version`, `timestamp`, `frame_id`,
+  `subframe1`, `subframe2`, `subframe3`, `subframe4`,
+  `time_of_transmission`) follow the interop-PDF p.3-4 template
+  literally.  V1.0-TBW regions (`ced`, `health`, `time_conversions`,
+  `subframe{3,4}.data`) are emitted in the strict interop-PDF page-4
+  shape — empty objects, scalar `health: 0` — with the raw bit-slices
+  preserved in `_`-prefixed disclosure siblings.  The shipped
+  `timestamp` is pinned to the LSIS V1.0 publication date
+  (2025-01-29T00:00:00Z) for byte-stable output across rebuilds.
+- Two new `validate.py` subcommands:
+  - **`check-parsed`** (~290 LoC, stdlib-only): verifies the shipped
+    JSONs structurally and against ground truth.  Performs seven
+    distinct checks per JSON:
+    1. JSON schema (required top-level + per-subframe keys)
+    2. Spec-range checks (FID 0..3, TOI 0..99, WN 0..8191,
+       ITOW 0..511 raw 9-bit max, type 0..63 6-bit max)
+    3. ToT round-trip per V1.0 §2.5.5 with `dt_lrt = 0`
+    4. FID/TOI ground-truth match against `PARSED_TEST_VECTORS` table
+       (we know what we encoded)
+    5. WN/ITOW byte-compare against `inputs/*_input.bin[0..21]`
+       MSB-first bit-unpack (V1.0 Table 22)
+    6. Per-subframe `_data_raw_hex` byte-equal to corresponding
+       `inputs/*_input.bin` slice (catches any bit-position confusion
+       in the parser)
+    7. `_crc24q_ok` flag = `true` on every subframe (V1.0 §2.4.3.1.3)
+
+    NOT a parser — there is no BCH(51,8) decoder, no LDPC, no
+    bit-level CED extraction in this oracle.  Independence at the
+    parser level comes from PocketSDR-AFS at L4 (which independently
+    extracts WN/ITOW/TOI from the symbol stream), not from a
+    reimplementation in `validate.py`.
+  - **`diff-parsed <user-dir>`** (~70 LoC): field-by-field diff of
+    a third-party parsed JSON directory against ours.  Compares only
+    the spec-shaped fields (`version`, `frame_id`,
+    `time_of_transmission`, per-subframe `fid/toi/wn/itow/type`);
+    underscore-prefixed LunaLink metadata (provenance markers, raw
+    bit-slices, disclosure tags) is intentionally excluded so a
+    third-party implementation emitting only the spec-shaped fields
+    still matches.  For raw-bit-slice cross-impl comparison, use
+    `diff-inputs` against `inputs/` instead — those bits are the
+    transmit-side ground truth and exist upstream of the L5 parsing
+    layer.
+- `manifest.json` `levels` bumped 0.4.0's `[1, 2, 3, 4]` → `[1, 2, 3, 4, 5]`,
+  oracles list extended with the L5 entry, file count 704 → 711
+  (the seven new `parsed/*.json`).
+- 11 new pytest cases in `tests/test_validate.py` exercising:
+  schema/range/ToT/ground-truth checks pass on the shipped JSONs;
+  fault injection (FID flip, WN flip, ToT flip, missing required
+  field, malformed JSON, out-of-range FID) all surface as expected;
+  `diff-parsed` self-match is clean; `diff-parsed` detects field
+  flips with file + key localisation; help-coverage parametrize
+  extended for both new subcommands; manifest covers every shipped
+  parsed file; shipped JSONs all carry the byte-stable
+  `2025-01-29T00:00:00Z` timestamp.
+
+### Producer
+
+The shipped JSONs are produced by the LuarSpace reference implementation
+(LunaLink, scheduled for public release at Phase 2).  The producer
+orchestrator lives in the lunalink repo at
+`scripts/export_test_vectors_l5.py` and uses lunalink's full RX path
+(sync detect + BCH SB1 + LDPC SB2/SB3/SB4 + CRC verify + parse) on
+each `frames/frame_*.bin`.  The `export_parsed_json_interop_v1()`
+emitter assembles the spec-shaped JSON from the resulting `DecodeResult`
++ explicit `parse_sb2/parse_sb3/parse_sb4` calls.
+
+The seven shipped JSONs are byte-for-byte reproducible from the merged
+LunaLink `main` (the interop test-vector producer landed upstream;
+emitter + RX path frozen): re-running the producer over this repo's
+`frames/` regenerates `parsed/` with an identical aggregate SHA-256.
+The strict interop-PDF page-4 shape (empty `ced`/`time_conversions`/
+`subframe{3,4}.data` objects, scalar `health: 0`, `Z`-suffixed
+publication-date `timestamp`) is what that frozen emitter produces.
+
+### Validation strategy at L5
+
+| Oracle | What it verifies | Independence claim |
+|:---|:---|:---|
+| **`check-parsed` (this release)** | Structural + spec-range + ToT round-trip + FID/TOI/WN/ITOW ground truth + raw-data byte-equal vs `inputs/` + CRC flag | NOT a parser; load-bearing independence on V1.0-pinned fields comes from L4 |
+| **`check-decode` (already shipped at v0.4.0)** | PocketSDR-AFS independently extracts WN, ITOW, TOI from the L3 signal symbol stream and produces post-FEC bytes byte-equal to `inputs/`.  At L5, the same `_data_raw_hex` slices in the parsed JSON also have to byte-equal those `inputs/` files — closing the cross-impl loop on the load-bearing fields. | PocketSDR-AFS = different codebase (C, RTKLIB-derived), different language, different decoder; pinned at SHA |
+| **`diff-parsed` (this release)** | Third-party parsed-JSON directory matches ours on the spec-shaped fields | Reciprocal cross-impl tool |
+
+### Repo footprint delta
+
+| | v0.4.0 | v0.5.0 | Δ |
+|:---|---:|---:|---:|
+| Files in manifest | 704 | 711 | +7 |
+| Python LoC in `validate.py` | — | +~360 | +~360 |
+| New tests | — | 11 | +11 |
+| Shipped artefacts | — | 7 × ~4.4 KB JSON | +30 KB |
+| CI added time | — | <1 s | — |
+
+The seven JSONs ship as plain text (no compression) so consumers can
+diff them with stock `git diff` without setup.
+
+### What's NOT in this drop
+
+- **TC3 message-type coverage** (interop-PDF Test Case 3, "verify all
+  message types encode/decode correctly") — V1.0 itself declares the
+  content of every MSG-G* / S* (Network Access G1, Health G2, CED G4,
+  Almanac G5, Maneuver G10, Attitude G11, Ancillary G17, LunaSAR S20,
+  Time Conversions G30, Differential Corrections G31, Coordinate
+  Frame Conversions G32) as TBW / placeholder.  Only MSG-G8 (ToT) has
+  a complete bit-level definition; that one IS exercised by L5 via the
+  ToT formula round-trip.  TC3 will be revisited if/when a future LSIS
+  V2.0 pins the message-type bit allocations.
+- **TC5 error-condition oracle** (interop-PDF Test Case 5, "verify
+  error handling and CRC validation") — `check-parsed` does verify
+  the `_crc24q_ok` flag on every subframe, and the bundled
+  PocketSDR-AFS receiver at L4 already performs LDPC + CRC validation
+  end-to-end.  An explicit fault-injection oracle (bit-flip a SB2 byte,
+  assert CRC catches) was scoped out of this release: the load-bearing
+  CRC check happens at L4 inside the receiver, and adding a Python
+  fault-injection harness at L5 would either re-implement CRC-24Q in
+  this repo (the "reimplementation smell" we explicitly rejected for
+  Oracle 1) or run a heavier receiver-side fault sweep (large CI cost
+  for marginal coverage gain).  Per-flag CRC visibility on every
+  shipped frame is sufficient at L5; TC5 stays scoped to the L4
+  oracle's existing CRC enforcement.
+- **Cross-implementation matrix** (interop-PDF Phase 3, "exchange
+  generated test vectors between teams").  This release ships the
+  reference vectors and the `diff-parsed` tool; the matrix itself
+  needs other teams' implementations and is out of scope for a
+  single-implementation drop.
 
 ## [0.4.0] — 2026-05-05
 

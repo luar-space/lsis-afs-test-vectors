@@ -4,7 +4,8 @@
     1,
     2,
     3,
-    4
+    4,
+    5
   ],
   "implementation": "LuarSpace",
   "spec": "LSIS-AFS V1.0, 29 January 2025",
@@ -13,7 +14,8 @@
     "LANS-AFS-SIM (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma) \u2014 L1+L2 independent",
     "LSIS-AFS V1.0 \u00a72.4 + Gateway 3 checklist \u2014 L2 structural",
     "interoperability.pdf Signal Export Format + LSIS V1.0 \u00a74 + first-chip polarity (chains L1 codes + L2 sync prefix into L3) \u2014 L3 structural",
-    "PocketSDR-AFS (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma; pinned SHA 5b23809f30d68518b7fad7a564fd0fac57cc497d) \u2014 L4 cross-decode"
+    "PocketSDR-AFS (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma; pinned SHA 5b23809f30d68518b7fad7a564fd0fac57cc497d) \u2014 L4 cross-decode",
+    "interoperability.pdf \u00a7Parsed Data Export Format + LSIS V1.0 Tables 13/22 + \u00a72.5.5 + \u00a72.4.3.1.3 \u2014 L5 structural + spec-range + ToT round-trip + raw-data byte-equal vs inputs/"
   ],
   "files": {
     "codes/codes_prn001.hex": "cecb0cc305103fe6e5643855ab5daa6f4312402b46566928b44c48a95c0147b3",
@@ -240,6 +242,13 @@
     "inputs/frame_message_3_input.bin": "840b655985c73a60358d10574e6ab9a9fc53cd3fffcab8f7770c0ede0277417d",
     "inputs/frame_message_4_input.bin": "c340e10775c6bee1f491735875774b65e49d8abd3b87b7e9858214cb132c6254",
     "inputs/frame_message_5_input.bin": "ae3e6f1ad9834b4aec97ace40c859177014f9f11e0e368e019b55a2bfec06f77",
+    "parsed/parsed_frame_boundary.json": "809a6ce751aced24087a1efb7615b2cba6f1e16699d780fef0460577f1da3301",
+    "parsed/parsed_frame_boundary_max_fields.json": "e0a7d32904939699cf2b159433d0602c7a87164c81d531f5d00f078abe92751e",
+    "parsed/parsed_frame_message_1.json": "64f148161dce13cc1f234548dae7e4b53cd4445206e3c8763237eb0bcaf01ecb",
+    "parsed/parsed_frame_message_2.json": "c3d43f55a6b4087336496b9aef2d787c63f1c43016327c6e0077b6861d1986a0",
+    "parsed/parsed_frame_message_3.json": "6b08cb1a0da73b83353647244a663652f63597c30d597499a292ad6d2a67d8f9",
+    "parsed/parsed_frame_message_4.json": "39b021f713aa1b0920e6ca98891cc32723f92b4ba883a247c57428ff8b3889f4",
+    "parsed/parsed_frame_message_5.json": "1f608bc556b75d4adbab943a408664b7d0359b9c923ea97de50359a44ed2f66c",
     "references/README.md": "3d538342c587ac47fd4ac3249508109c0199a28425ae6c69cd6c3d44b86718a4",
     "references/annex-3/006_GoldCode2046hex210prns.txt": "3b7f997e9ca7671a3ab7636104a6daf838420818da0e738fc34e60608ddffdbd",
     "references/annex-3/007_l1cp_hex210prns.txt": "d7fad990fae6773d1515da6a0fabf0cf8b19980aed627eb2c63192799241a912",

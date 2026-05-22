@@ -16,16 +16,20 @@ transmit / receive chain.
 | **1** | Spreading-code generation                              | LNIS Vol A Annex 3 + LANS-AFS-SIM            | ✅ shipped in `v0.1.0` |
 | **2** | Encoded-frame generation (BCH + CRC-24 + LDPC + interleaving) | LSIS V1.0 §2.4 structural + LANS-AFS-SIM | ✅ shipped in `v0.2.0` |
 | **3** | Baseband I/Q signal generation                         | LSIS V1.0 §4 structural + first-chip polarity (chains L1+L2) | ✅ shipped in `v0.3.0` (single oracle, see below) |
-| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)            | planned (closes L3 receive-side too) |
-| **5** | Navigation-data parsing from decoded frames            | main spec §5–6 + PocketSDR-AFS parser        | planned |
+| **4** | Cross-decoding between implementations                 | PocketSDR-AFS (reference decoder)            | ✅ shipped in `v0.4.0` |
+| **5** | Navigation-data parsing from decoded frames            | LSIS V1.0 Tables 13/22 + §2.5.5 + interop-PDF spec shape; LunaLink reference parser; transitive cross-impl via L4 PocketSDR-AFS | ✅ shipped in `v0.5.0` |
 
 L1–L2 oracles sit on the transmit side and are externally verified using [LANS-AFS-SIM](https://github.com/osqzss/LANS-AFS-SIM) alongside the normative references from LSIS-AFS v1.0.
 L3 sits on the transmit side too but currently has only one formal oracle (structural + first-chip polarity, chaining L1 codes and L2 sync prefix); LANS-AFS-SIM is not the right shape for L3 (multi-PRN sum, internal-almanac nav data, carrier+Doppler applied) and no second open-source AFS generator exists yet. Receive-side closure for L3 ("decode our signal → frame ≡ shipped L2 frame") is the natural shape for the spec's L3 Pass Criteria and lands with v0.4.0.
-L4–L5 sit on the receive side and are covered by [PocketSDR-AFS](https://github.com/osqzss/PocketSDR-AFS) —
-Ebinuma's companion software-defined receiver. Both tools are BSD-2-Clause
-and redistributable as derived outputs the same way [Annex 3](references/annex-3/) and the
-LANS-AFS-SIM chip dumps are bundled today. The PocketSDR-AFS integration
-will be exercised ahead of the June workshop so that L3 closure plus L4/L5 evidence is demonstrated before the in-person hackathon.
+L4 sits on the receive side and is covered by [PocketSDR-AFS](https://github.com/osqzss/PocketSDR-AFS) —
+Ebinuma's companion software-defined receiver, BSD-2-Clause and redistributable
+as derived outputs the same way [Annex 3](references/annex-3/) and the LANS-AFS-SIM chip
+dumps are bundled today.  L5 sits on the parsing layer downstream of L4 and is
+covered by a stdlib structural oracle in this repo (`check-parsed`), with
+load-bearing independence on the V1.0-pinned fields (FID, TOI, WN, ITOW, ToT)
+inherited transitively from L4: PocketSDR-AFS already extracts those same
+fields from the symbol stream into `decoded_fec_signal_*.bin`, which the L5
+parsed JSONs cite by raw-bit-slice byte-equality.
 
 Each level drops its content into its own sibling directory (`codes/`,
 `frames/`, `signals/`, `parsed/`) and its oracle(s) into `references/`.
@@ -43,7 +47,7 @@ lsis-afs-test-vectors/
 ├── inputs/                          # Level 2 — 6 × frame_*_input.bin (canonical pre-encode bytes) ✅ shipped
 ├── signals/                         # Level 3 — 10 × signal_*_12s.iq.gz      ✅ shipped (~221 MB total)
 │                                    # Level 4 — no content dir; see references/pocketsdr-afs/
-├── parsed/                          # Level 5 — parsed navigation JSON            (planned)
+├── parsed/                          # Level 5 — 7 × parsed_frame_*.json     ✅ shipped (~30 KB)
 ├── references/                      # bundled oracles, grows with future levels
 │   ├── annex-3/                     #   L1 normative — 3 × .txt + README
 │   ├── lans-afs-sim/                #   transmit-side oracle (BSD-2-Clause, © Ebinuma)
@@ -53,9 +57,11 @@ lsis-afs-test-vectors/
 │   │   ├── LICENSE.txt
 │   │   └── README.md
 │   │   # No signals/ — LANS-AFS-SIM doesn't fit L3 (see CORRECTNESS.md).
-│   ├── pocketsdr-afs/               #   receive-side oracle                       (planned)
-│   │   ├── decode/                  #     L4 cross-decode reference
-│   │   └── parsed/                  #     L5 parsed-JSON reference
+│   ├── pocketsdr-afs/               #   receive-side oracle (BSD-2-Clause, © Takasu+Ebinuma)
+│   │   ├── decoded/                 #     L4 cross-decode outputs (20 × .bin) ✅ shipped
+│   │   ├── harnesses/               #     Apache-2.0 source for the verifier
+│   │   ├── LICENSE.txt
+│   │   └── README.md
 │   ├── interoperability.pdf         #   competition schema reference
 │   ├── technical-faq.pdf            #   competition FAQ + errata (PRN 62 note)
 │   └── README.md
@@ -88,7 +94,7 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.4.0` (Levels 1 + 2 + 3 + 4)
+## Current release — `v0.5.0` (Levels 1 + 2 + 3 + 4 + 5)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
@@ -313,6 +319,82 @@ python validate.py check-decode
 outputs (60 KB channel + 28 KB FEC) + harness sources + the upstream
 LICENSE.
 
+### Level 5 — parsed navigation JSON (7 files, ~30 KB)
+
+Seven files under `parsed/` produced by the **LunaLink** reference
+implementation (the LuarSpace generator that produces every shipped
+artefact in this repo) running its full RX path on each `frames/frame_*.bin`:
+sync detect → BCH(51,8) on SB1 → deinterleave → LDPC(1/2) on SB2/SB3/SB4
+→ CRC-24Q verify → field-level parse.  Each JSON follows the
+[interop-PDF p.3-4 "Parsed Data Export Format"](./references/interoperability.pdf)
+shape literally:
+
+```json
+{
+  "version": "1.0",
+  "timestamp": "2025-01-29T00:00:00Z",
+  "frame_id": "frame_message_1",
+  "subframe1": {"fid": 0, "toi": 0, ...},
+  "subframe2": {"wn": 0, "itow": 0, "ced": {}, "health": 0, ...},
+  "subframe3": {"type": 0, "data": {}, ...},
+  "subframe4": {"type": 0, "data": {}, ...},
+  "time_of_transmission": 0.0,
+  ...
+}
+```
+
+**LSIS V1.0 honesty.**  V1.0 (29 January 2025) only fully pins five
+field families: FID/TOI per Tables 13/14, WN/ITOW per Table 22, the
+ToT formula per §2.5.5, and CRC-24Q per §2.4.3.1.3.  CED (§2.5.3 /
+LSIS-TBW-2006), Health (§2.5.2 / LSIS-TBW-2005), Time Conversions
+(§2.5.20 / LSIS-TBW-2012), and the SF3/SF4 type-field width
+(LSIS-TBC-2023/2024, "4 or 6 bits") are TBW or TBC.  The shipped
+JSONs reflect this faithfully:
+
+- V1.0-pinned fields ship as concrete values
+- V1.0-TBW regions ship as raw bit-slice hex with explicit
+  `_lsis_ref: "LSIS-TBW-NNNN"` markers
+- V1.0-TBC type widths ship LunaLink's resolved 6-bit choice with a
+  disclosure marker so a third-party 4-bit implementation surfaces
+  the disagreement at `diff-parsed` time
+
+| Parsed JSON | Source frame | FID | TOI | WN | ITOW | Coverage |
+|:---|:---|:---:|:---:|:---:|:---:|:---|
+| `parsed_frame_message_1.json` | `frame_message_1.bin` | 0 | 0 | 0 | 0 | TC1 baseline |
+| `parsed_frame_message_2.json` | `frame_message_2.bin` | 0 | 0 | 8191 | 511 | TC1 — all-ones (out-of-spec ITOW=511 surfaced) |
+| `parsed_frame_message_3.json` | `frame_message_3.bin` | 0 | 0 | 5461 | 170 | TC1 — alternating-1 |
+| `parsed_frame_message_4.json` | `frame_message_4.bin` | 0 | 0 | 0 | 64 | TC1 — bytewise marker |
+| `parsed_frame_message_5.json` | `frame_message_5.bin` | 0 | 0 | 5434 | 47 | TC1 — xorshift32 |
+| `parsed_frame_boundary.json` | `frame_boundary.bin` | 3 | 99 | 2730 | 341 | TC4 — FID/TOI maxima |
+| `parsed_frame_boundary_max_fields.json` | `frame_boundary_max_fields.bin` | 3 | 99 | 8191 | 503 | TC4 — WN/ITOW maxima (ITOW clamped to spec max) |
+
+The cheap CI form runs the structural + ground-truth oracle:
+
+```bash
+python validate.py check-parsed
+#   Parsed-JSON oracle:  7/7
+#
+# OK — all 7 parsed JSONs pass schema, spec-range, ToT round-trip,
+# FID/TOI/WN/ITOW ground-truth, raw-data byte-compare, and CRC checks.
+```
+
+The third-party diff tool (mirrors `diff-frames`, `diff-decode`):
+
+```bash
+python validate.py diff-parsed /path/to/your/parsed/
+```
+
+`diff-parsed` compares only the spec-shaped fields (`fid`, `toi`,
+`wn`, `itow`, `type`, `time_of_transmission`); the underscore-prefixed
+LunaLink metadata is excluded so a third-party implementation emitting
+only the spec-shaped fields still matches.  For raw-bit-slice cross-impl
+comparison of the V1.0-TBW regions, use `diff-inputs` against `inputs/`
+instead — those bits are the transmit-side ground truth and exist
+upstream of the L5 parsing layer.
+
+**Repository footprint.** L5 adds **~30 KB** (7 plain-text JSON files,
+no compression so consumers can `git diff` them with no setup).
+
 ### Validator subcommands
 
 ```bash
@@ -337,6 +419,9 @@ python validate.py check-signals
 # Level 4 — cheap round-trip oracle (decoded outputs vs frame payloads).
 python validate.py check-decode
 
+# Level 5 — parsed-JSON structural + spec-range + ground-truth oracle.
+python validate.py check-parsed
+
 # Compare your implementation's output against this repo.
 python validate.py diff         /path/to/your/codes/
 python validate.py diff-frames  /path/to/your/frames/
@@ -351,6 +436,7 @@ python validate.py diff-signals /path/to/your/signals/
 # --json emits one round-robin matrix cell; --vs-pocketsdr adds a
 # secondary diff.  Full protocol: INTEROP-ROUNDROBIN.md
 python validate.py diff-decode  /path/to/your/decoded/
+python validate.py diff-parsed  /path/to/your/parsed/
 
 # Re-hash everything to confirm the distribution is intact.
 python validate.py verify-manifest
@@ -358,7 +444,7 @@ python validate.py verify-manifest
 
 ### Correctness
 
-Five oracles ship with this release, all reproducible offline:
+Six oracles ship with this release, all reproducible offline:
 
 1. **LNIS AD1 Volume A, Annex 3** (L1 normative) — every `.hex` file matches
    byte-for-byte; `check-annex3` reports 630/630.
@@ -381,8 +467,20 @@ Five oracles ship with this release, all reproducible offline:
    via the bundled SB1 FID-bypass); `check-decode` reports both, and
    `verify_pocketsdr_decode.py` reproduces the full clone + build +
    decode chain (~5–10 min).
+6. **Parsed-JSON structural + ground-truth** (L5) — every shipped
+   `parsed/parsed_frame_*.json` passes seven checks: JSON schema, V1.0
+   spec-range (FID 0..3, TOI 0..99, WN 0..8191, ITOW 0..511 raw 9-bit
+   max, type 0..63), ToT round-trip per V1.0 §2.5.5, FID/TOI
+   ground-truth match against the encoding table, WN/ITOW byte-compare
+   against `inputs/*_input.bin[0..21]` MSB-first bit-unpack, per-subframe
+   `_data_raw_hex` byte-equal to the corresponding `inputs/` slice, and
+   `_crc24q_ok` flag = `true` on every subframe; `check-parsed` reports
+   7/7.  This is NOT a parser — load-bearing parser independence on the
+   V1.0-pinned fields comes from L4 (PocketSDR-AFS independently extracts
+   WN/ITOW/TOI in `decode_AFSD_frame` and produces post-FEC bits byte-equal
+   to the same `inputs/` files cited at L5).
 
-All six checks run in CI on every push, alongside `ruff check`, `ruff
+All seven checks run in CI on every push, alongside `ruff check`, `ruff
 format --check`, `pytest`, and `verify-manifest`. See
 [`CORRECTNESS.md`](./CORRECTNESS.md) for the oracle-coverage table, the
 encoding rules they validate, and the disclosed normalisations applied to
