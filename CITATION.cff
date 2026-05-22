@@ -19,8 +19,8 @@ keywords:
   - ESA
   - test-vectors
   - interoperability
-version: "0.5.0"
-date-released: "2026-05-18"
+version: "0.6.0"
+date-released: "2026-05-22"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
@@ -28,7 +28,8 @@ abstract: >-
   Signal-In-Space Augmented Forward Signal) specification, Version 1.0
   (29 January 2025). Targets the five test levels defined in the
   competition interoperability plan, shipped incrementally as drops to
-  the same repository.  Version 0.5.0 covers Levels 1, 2, 3, 4, and 5.
+  the same repository.  Version 0.6.0 covers Levels 1, 2, 3, 4, and 5
+  plus Phase-3 FEC component vectors (BCH/CRC/LDPC/interleaver).
   Level 1 ships all 210 PRN spreading codes — Gold (AFS-I primary),
   Weil 10230 (AFS-Q primary), Weil 1500 (tertiary) and the four AFS-Q
   secondary codes — in the standardized hex format, bit-exact against

@@ -22,6 +22,7 @@ is meaningful evidence of specification compliance.
 | **L1** spreading codes | your `codes_prn*.hex` | `validate.py diff <dir>` | `codes/` (byte-equal vs Annex 3) |
 | **L2** encoded frames | your `frame_*.bin` | `validate.py diff-frames <dir>` | `frames/` |
 | **L2** pre-encode inputs | your `frame_*_input.bin` | `validate.py diff-inputs <dir>` | `inputs/` |
+| **L2** FEC components (BCH/CRC/LDPC/interleaver) | your `fec/*.json` | `validate.py diff-fec <dir>` | `fec/` |
 | **L3** baseband signals | your `signal_*.iq[.gz]` | `validate.py diff-signals <dir>` | `signals/` |
 | **L4** decoded data | your `decoded_fec_*.bin` | `validate.py diff-decode <dir>` | `inputs/` (original data) |
 | **L5** parsed nav data | your `parsed_*.json` | `validate.py diff-parsed <dir>` | `parsed/` |
@@ -75,7 +76,7 @@ decoder*.
 **Proposed standard reference set.** Rather than have each team re-derive
 the standardized messages and hope the bytes agree, this protocol proposes
 **this repository's `inputs/` (and `frames/`), pinned to release tag
-`v0.5.0`, as the single agreed reference everyone diffs against.** These
+`v0.6.0`, as the single agreed reference everyone diffs against.** These
 are not ad-hoc: `inputs/` is the canonical pre-encode data, unchanged since
 v0.2.1, cross-checked by the L2 structural oracle and LANS-AFS-SIM, and
 round-tripped byte-exact by an independent receiver (PocketSDR-AFS) at L4.
@@ -115,7 +116,7 @@ For each input signal, write into one directory:
 
 ### Reference: the expected bytes
 
-The proposed standard reference is **this repository at tag `v0.5.0`**:
+The proposed standard reference is **this repository at tag `v0.6.0`**:
 
 - `inputs/frame_<id>_input.bin` — 2868 bytes, the canonical pre-encode data
   the post-FEC output must equal. **This is the round-robin's source of

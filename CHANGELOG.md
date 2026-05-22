@@ -17,10 +17,50 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 | 0.3.0     | + Level 3 |
 | 0.4.0     | + Level 4 |
 | **0.5.0** | + Level 5 (feature-complete; this release) |
+| **0.6.0** | + Phase-3 FEC component vectors (BCH/CRC/LDPC/interleaver) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
+
+## [0.6.0] — 2026-05-22
+
+Phase-3 **FEC component test vectors** — isolated, full, byte-exact-diffable
+encode/decode vectors for the four FEC stages, so teams working at the
+spreading-code / FEC / framing gateways can cross-check each stage in
+isolation rather than only at the assembled-frame level (`diff-frames`).
+
+### Added
+
+- `fec/` — four component vector files (full inputs + outputs, MSB-first hex):
+  - `bch_vectors.json` — BCH(51,8) encode/decode, full 52-symbol codewords over the (FID, TOI) grid
+  - `crc24_vectors.json` — CRC-24Q (G=0x864CFB, seed 0) input → 24-bit CRC, 8 patterns
+  - `interleaver_vectors.json` — 60×98 block interleaver, **full** 5880-bit input + output
+  - `ldpc_vectors.json` — LDPC(1/2) SF2/SF3/SF4 encode, **full** codewords
+- Two `validate.py` subcommands:
+  - **`check-fec`** — structural + self-consistency (BCH hamming=0 + decode
+    round-trip; CRC verify_passes; interleaver round-trip + permutation
+    invariants) + a **BCH frame-anchor**: for the (FID, TOI) pairs matching a
+    shipped frame, the BCH codeword must equal that frame's SB1 region
+    bit-for-bit. NOT a BCH/LDPC/CRC reimplementation.
+  - **`diff-fec <dir>`** — field-by-field cross-impl comparison (pure compare).
+- 5 new pytest cases; `manifest.json` extended to 715 SHA-pinned files; FEC row
+  added to the round-robin table; CI runs `check-fec`.
+
+### Oracle-backing (no reimplementation)
+
+The vectors are full decompositions of the pipeline that produces `frames/`.
+At generation the chain `inputs/ → CRC → LDPC → interleave → frame` was
+verified to reconstruct all seven shipped frames byte-exact; in the repo,
+`check-fec`'s BCH frame-anchor ties the component set to those LANS-AFS-SIM /
+L4-PocketSDR-verified frames with no FEC math in `validate.py`.
+
+### Producer
+
+Regenerated full (untruncated) from lunalink's merged FEC primitives
+(`bch_encode`, `crc24_calculate`, `ldpc_encode`, `block_interleave`); the
+upstream fixtures ship truncated LDPC/interleaver outputs unsuitable as
+standalone interop references.
 
 ## [0.5.0] — 2026-05-18
 
