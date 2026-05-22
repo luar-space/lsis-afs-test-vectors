@@ -88,6 +88,7 @@ import re
 import struct
 import sys
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 # Optional speedup for the L3 full-range scan: numpy reads a 982 MB float32
@@ -2229,6 +2230,300 @@ def cmd_diff_parsed(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─────────────────────────────── fec (component vectors) ────────────────────
+#
+# Phase-3 FEC component test vectors: isolated BCH(51,8), CRC-24Q, 60×98 block
+# interleaver, and LDPC(1/2) SF2/SF3/SF4 encode vectors with FULL inputs and
+# outputs, so a third party can byte-compare each FEC stage in isolation rather
+# than only at the assembled-frame level (diff-frames).
+#
+# check-fec is NOT a BCH/LDPC/CRC reimplementation.  It verifies:
+#   1. schema + bit-length + binary-value structure of every vector;
+#   2. producer self-consistency flags (BCH hamming_distance == 0 + decode
+#      round-trip; CRC verify_passes; interleaver round_trip_ok);
+#   3. interleaver: full column-major permutation (input → output) verified
+#      end-to-end, plus round-trip flag and spot-check mapping;
+#   4. a BCH frame-anchor — for the (FID, TOI) pairs that match a shipped
+#      frame, the BCH codeword must equal that frame's SB1 region bit-for-bit.
+#
+# Full-pipeline equivalence to frames/ (inputs → CRC → LDPC → interleave →
+# frame) is established at generation time by the maintainer stitch check and
+# inherited from the L2 structural / LANS-AFS-SIM / L4 PocketSDR-AFS oracles;
+# the BCH anchor ties this component set to that verified ground truth here.
+
+FEC_DIR = REPO_ROOT / "fec"
+FEC_BCH_CODEWORD_BITS = 52
+FEC_CRC_BITS = 24
+FEC_LDPC_PARAMS: dict[str, tuple[int, int]] = {
+    "SF2": (1200, 2400),
+    "SF3": (870, 1740),
+    "SF4": (870, 1740),
+}
+FEC_INTERLEAVER_ROWS = 60
+FEC_INTERLEAVER_COLS = 98
+FEC_INTERLEAVER_SIZE = 5880
+# (fid, toi) → representative shipped frame whose SB1 the BCH codeword must equal.
+FEC_BCH_ANCHORS: dict[tuple[int, int], str] = {
+    (0, 0): "frame_message_1.bin",
+    (3, 99): "frame_boundary.bin",
+}
+
+
+def _fec_load(name: str) -> tuple[dict | None, str | None]:
+    path = FEC_DIR / name
+    if not path.exists():
+        return None, f"{name}: missing"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"{name}: invalid JSON ({exc})"
+
+
+def _is_bit_list(x: object, n: int | None = None) -> bool:
+    if not isinstance(x, list):
+        return False
+    if n is not None and len(x) != n:
+        return False
+    return all(b in (0, 1) for b in x)
+
+
+def _hex_to_bits(hexstr: object, nbits: int) -> list[int] | None:
+    if not isinstance(hexstr, str):
+        return None
+    try:
+        raw = bytes.fromhex(hexstr)
+    except ValueError:
+        return None
+    bits: list[int] = []
+    for byte in raw:
+        for j in range(7, -1, -1):
+            bits.append((byte >> j) & 1)
+    return bits[:nbits]
+
+
+def _bits_hex_match(bit_list: list[int], hexstr: object) -> bool:
+    return _pack_bits_msbfirst(bytes(bit_list)).lower() == str(hexstr).lower()
+
+
+def _frame_sb1_bits(frame_filename: str) -> list[int]:
+    data = (FRAMES_DIR / frame_filename).read_bytes()
+    payload = data[FRAME_HEADER_LEN:FRAME_FILE_LEN]
+    return list(payload[68 : 68 + FEC_BCH_CODEWORD_BITS])
+
+
+def _check_fec_bch(doc: dict, errors: list[str]) -> None:
+    if doc.get("codeword_length") != FEC_BCH_CODEWORD_BITS:
+        errors.append(f"bch_vectors.json: codeword_length != {FEC_BCH_CODEWORD_BITS}")
+    for i, v in enumerate(doc.get("vectors", [])):
+        tag = f"bch_vectors[{i}]"
+        fid, toi = v.get("fid"), v.get("toi")
+        if not (isinstance(fid, int) and 0 <= fid <= 3):
+            errors.append(f"{tag}: fid {fid} out of range [0,3]")
+        if not (isinstance(toi, int) and 0 <= toi <= 99):
+            errors.append(f"{tag}: toi {toi} out of range [0,99]")
+        cw = v.get("codeword_bits")
+        if not _is_bit_list(cw, FEC_BCH_CODEWORD_BITS):
+            errors.append(f"{tag}: codeword_bits not {FEC_BCH_CODEWORD_BITS} binary symbols")
+            continue
+        if not _bits_hex_match(cw, v.get("codeword_hex", "")):
+            errors.append(f"{tag}: codeword_hex does not match codeword_bits")
+        if v.get("decoded_fid") != fid or v.get("decoded_toi") != toi:
+            errors.append(f"{tag}: decode round-trip mismatch")
+        if v.get("hamming_distance") != 0:
+            errors.append(f"{tag}: hamming_distance != 0 (noiseless encode must round-trip)")
+        anchor = FEC_BCH_ANCHORS.get((fid, toi))
+        if anchor is not None and cw != _frame_sb1_bits(anchor):
+            errors.append(f"{tag}: codeword != {anchor} SB1 region (frame-anchor failed)")
+
+
+def _check_fec_crc(doc: dict, errors: list[str]) -> None:
+    for i, v in enumerate(doc.get("vectors", [])):
+        tag = f"crc24_vectors[{i}] {v.get('description', '')}"
+        if not _is_bit_list(v.get("input_bits")):
+            errors.append(f"{tag}: input_bits not binary")
+        cb = v.get("crc_bits")
+        if not _is_bit_list(cb, FEC_CRC_BITS):
+            errors.append(f"{tag}: crc_bits not {FEC_CRC_BITS} binary")
+            continue
+        if not _bits_hex_match(cb, v.get("crc_hex", "")):
+            errors.append(f"{tag}: crc_hex does not match crc_bits")
+        if v.get("verify_passes") is not True:
+            errors.append(f"{tag}: verify_passes not true")
+
+
+def _check_fec_interleaver(doc: dict, errors: list[str]) -> None:
+    rows, cols, size = doc.get("rows"), doc.get("cols"), doc.get("size")
+    if not (
+        rows == FEC_INTERLEAVER_ROWS
+        and cols == FEC_INTERLEAVER_COLS
+        and size == FEC_INTERLEAVER_SIZE
+        and rows * cols == size
+    ):
+        errors.append("interleaver_vectors.json: rows/cols/size inconsistent")
+    for i, v in enumerate(doc.get("vectors", [])):
+        tag = f"interleaver_vectors[{i}] {v.get('description', '')}"
+        inb = _hex_to_bits(v.get("input_hex", ""), FEC_INTERLEAVER_SIZE)
+        outb = _hex_to_bits(v.get("output_hex", ""), FEC_INTERLEAVER_SIZE)
+        if (
+            inb is None
+            or outb is None
+            or len(inb) != FEC_INTERLEAVER_SIZE
+            or len(outb) != FEC_INTERLEAVER_SIZE
+        ):
+            errors.append(f"{tag}: input/output_hex not {FEC_INTERLEAVER_SIZE} bits")
+            continue
+        # Full spec permutation: write row-wise (COLS per row), read column-wise
+        # (ROWS per col) → out[col*ROWS + row] = in[row*COLS + col]. This is the
+        # deterministic framing permutation (LSIS-FID0-470), not FEC math, so
+        # verifying it in full is on-policy — and unlike a popcount invariant it
+        # fully discriminates the non-constant patterns across all 5880 bits.
+        expected = [0] * FEC_INTERLEAVER_SIZE
+        for idx in range(FEC_INTERLEAVER_SIZE):
+            r, c = divmod(idx, FEC_INTERLEAVER_COLS)
+            expected[c * FEC_INTERLEAVER_ROWS + r] = inb[idx]
+        if outb != expected:
+            errors.append(f"{tag}: output is not the spec column-major interleave of input")
+        if v.get("round_trip_ok") is not True:
+            errors.append(f"{tag}: round_trip_ok not true")
+        for m in v.get("spot_check_mapping", []):
+            ip, op = m.get("input_pos"), m.get("output_pos")
+            if not isinstance(ip, int) or not isinstance(op, int):
+                errors.append(f"{tag}: malformed spot_check_mapping")
+                break
+            row, col = divmod(ip, FEC_INTERLEAVER_COLS)
+            if op != col * FEC_INTERLEAVER_ROWS + row:
+                errors.append(f"{tag}: spot-check {ip}->{op} != column-major formula")
+                break
+
+
+def _check_fec_ldpc(doc: dict, errors: list[str]) -> None:
+    for i, v in enumerate(doc.get("vectors", [])):
+        tag = f"ldpc_vectors[{i}] {v.get('subframe', '')}/{v.get('pattern', '')}"
+        sf = v.get("subframe")
+        if sf not in FEC_LDPC_PARAMS:
+            errors.append(f"{tag}: unknown subframe {sf!r}")
+            continue
+        k, n = FEC_LDPC_PARAMS[sf]
+        if v.get("k") != k or v.get("n") != n or v.get("codeword_length") != n:
+            errors.append(f"{tag}: k/n/codeword_length != ({k}, {n})")
+        if len(_hex_to_bits(v.get("message_hex", ""), k) or []) != k:
+            errors.append(f"{tag}: message_hex does not decode to {k} bits")
+        if len(_hex_to_bits(v.get("codeword_hex", ""), n) or []) != n:
+            errors.append(f"{tag}: codeword_hex does not decode to {n} bits")
+
+
+def cmd_check_fec(_args: argparse.Namespace | None = None) -> int:
+    """Validate fec/ component vectors (structural + self-consistency + BCH frame-anchor).
+
+    NOT a BCH/LDPC/CRC reimplementation — see the module comment above.
+    """
+    del _args
+    if not FEC_DIR.is_dir():
+        print(f"ERROR: {FEC_DIR} not found", file=sys.stderr)
+        return 2
+    if not FRAMES_DIR.is_dir():
+        # The BCH frame-anchor cross-checks fec/ against frames/; without it
+        # the oracle cannot run. Fail cleanly (matching check-frames/check-decode)
+        # rather than raising FileNotFoundError mid-check.
+        print(f"ERROR: {FRAMES_DIR} not found (required for the BCH frame-anchor)", file=sys.stderr)
+        return 2
+    checks = [
+        ("bch_vectors.json", _check_fec_bch),
+        ("crc24_vectors.json", _check_fec_crc),
+        ("interleaver_vectors.json", _check_fec_interleaver),
+        ("ldpc_vectors.json", _check_fec_ldpc),
+    ]
+    errors: list[str] = []
+    ok = 0
+    for name, fn in checks:
+        doc, err = _fec_load(name)
+        if doc is None:
+            errors.append(err or f"{name}: load failed")
+            continue
+        fn(doc, errors)
+        ok += 1
+    print(f"  FEC component oracle: {ok}/{len(checks)} files")
+    if errors:
+        print(f"\nFAIL: {len(errors)} problems", file=sys.stderr)
+        for m in errors[:20]:
+            print(f"  {m}", file=sys.stderr)
+        if len(errors) > 20:
+            print(f"  … ({len(errors) - 20} more)", file=sys.stderr)
+        return 1
+    print(
+        "\nOK — BCH/CRC/interleaver/LDPC vectors pass structure, self-consistency, "
+        "and the BCH frame-anchor."
+    )
+    return 0
+
+
+# (filename, vector-key function, fields compared) for diff-fec.
+_FEC_DIFF_SPEC: list[tuple[str, Callable[[dict], object], list[str]]] = [
+    ("bch_vectors.json", lambda v: (v.get("fid"), v.get("toi")), ["codeword_bits", "codeword_hex"]),
+    ("crc24_vectors.json", lambda v: v.get("description"), ["crc_bits", "crc_hex"]),
+    ("interleaver_vectors.json", lambda v: v.get("description"), ["input_hex", "output_hex"]),
+    (
+        "ldpc_vectors.json",
+        lambda v: (v.get("subframe"), v.get("pattern")),
+        ["message_hex", "codeword_hex"],
+    ),
+]
+
+
+def _diff_fec_one(
+    name: str, keyfn: Callable[[dict], object], fields: list[str], other: Path
+) -> str | None:
+    """Compare one fec/*.json file against theirs. Returns None on match, else a message."""
+    ours, oerr = _fec_load(name)
+    if ours is None:
+        return f"{name}: our copy {oerr}"
+    tpath = other / name
+    if not tpath.exists():
+        return f"{name}: missing in {other}"
+    try:
+        theirs = json.loads(tpath.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"{name}: their copy invalid ({exc})"
+    their_by_key = {str(keyfn(v)): v for v in theirs.get("vectors", [])}
+    for v in ours.get("vectors", []):
+        key = str(keyfn(v))
+        tv = their_by_key.get(key)
+        if tv is None:
+            return f"{name}: vector {key} missing in theirs"
+        for f in fields:
+            a, b = v.get(f), tv.get(f)
+            if f.endswith("_hex") and isinstance(a, str) and isinstance(b, str):
+                a, b = a.lower(), b.lower()
+            if a != b:
+                return f"{name}: vector {key} field {f!r} differs"
+    return None
+
+
+def cmd_diff_fec(args: argparse.Namespace) -> int:
+    """Compare a directory of fec/*.json vectors against ours, field-by-field.
+
+    Pure comparison — runs no FEC.  *_hex fields are matched case-insensitively.
+    """
+    other = Path(args.other_dir).resolve()
+    if not other.is_dir():
+        print(f"ERROR: {other} is not a directory", file=sys.stderr)
+        return 2
+    failures = [
+        msg
+        for name, keyfn, fields in _FEC_DIFF_SPEC
+        if (msg := _diff_fec_one(name, keyfn, fields, other)) is not None
+    ]
+    files_ok = len(_FEC_DIFF_SPEC) - len(failures)
+    print(f"Compared {files_ok}/{len(_FEC_DIFF_SPEC)} FEC vector files")
+    if failures:
+        print(f"\n{len(failures)} differences (first 10):", file=sys.stderr)
+        for m in failures[:10]:
+            print(f"  {m}", file=sys.stderr)
+        return 1
+    print("\nOK — all FEC component vectors match.")
+    return 0
+
+
 # ─────────────────────────────── verify-manifest ────────────────────────────
 
 
@@ -2299,7 +2594,7 @@ def _rebuild_manifest() -> int:
     on every clean checkout.
     """
     entries: dict[str, str] = {}
-    for sub in ("codes", "frames", "inputs", "signals", "parsed", "references"):
+    for sub in ("codes", "frames", "inputs", "signals", "parsed", "fec", "references"):
         base = REPO_ROOT / sub
         if not base.is_dir():
             continue
@@ -2336,6 +2631,9 @@ def _rebuild_manifest() -> int:
                 "interoperability.pdf §Parsed Data Export Format + LSIS V1.0 Tables "
                 "13/22 + §2.5.5 + §2.4.3.1.3 — L5 structural + spec-range + ToT "
                 "round-trip + raw-data byte-equal vs inputs/",
+                "LSIS-AFS-501/FID0-467/FID0-470 + Tables 16/19/20 — FEC components "
+                "(BCH/CRC/interleaver/LDPC) structural + self-consistency + BCH "
+                "frame-anchor vs frames/ (full-pipeline stitch verified at generation)",
             ],
             "files": dict(sorted(entries.items())),
         }
@@ -2527,6 +2825,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing parsed_*.json files to compare against ours.",
     )
     p_diff_parsed.set_defaults(func=cmd_diff_parsed)
+
+    sub.add_parser(
+        "check-fec",
+        help="Validate fec/ component vectors (BCH/CRC/interleaver/LDPC) structurally "
+        "+ self-consistency + BCH frame-anchor (Phase-3 oracle).",
+    ).set_defaults(func=cmd_check_fec)
+
+    p_diff_fec = sub.add_parser(
+        "diff-fec",
+        help="Compare a directory of fec/*.json component vectors against ours.",
+    )
+    p_diff_fec.add_argument(
+        "other_dir",
+        help="Directory containing fec/*.json vectors to compare against ours.",
+    )
+    p_diff_fec.set_defaults(func=cmd_diff_fec)
 
     sub.add_parser(
         "verify-manifest",

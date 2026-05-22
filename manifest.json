@@ -15,7 +15,8 @@
     "LSIS-AFS V1.0 \u00a72.4 + Gateway 3 checklist \u2014 L2 structural",
     "interoperability.pdf Signal Export Format + LSIS V1.0 \u00a74 + first-chip polarity (chains L1 codes + L2 sync prefix into L3) \u2014 L3 structural",
     "PocketSDR-AFS (BSD-2-Clause, \u00a9 2025 Takuji Ebinuma; pinned SHA 5b23809f30d68518b7fad7a564fd0fac57cc497d) \u2014 L4 cross-decode",
-    "interoperability.pdf \u00a7Parsed Data Export Format + LSIS V1.0 Tables 13/22 + \u00a72.5.5 + \u00a72.4.3.1.3 \u2014 L5 structural + spec-range + ToT round-trip + raw-data byte-equal vs inputs/"
+    "interoperability.pdf \u00a7Parsed Data Export Format + LSIS V1.0 Tables 13/22 + \u00a72.5.5 + \u00a72.4.3.1.3 \u2014 L5 structural + spec-range + ToT round-trip + raw-data byte-equal vs inputs/",
+    "LSIS-AFS-501/FID0-467/FID0-470 + Tables 16/19/20 \u2014 FEC components (BCH/CRC/interleaver/LDPC) structural + self-consistency + BCH frame-anchor vs frames/ (full-pipeline stitch verified at generation)"
   ],
   "files": {
     "codes/codes_prn001.hex": "cecb0cc305103fe6e5643855ab5daa6f4312402b46566928b44c48a95c0147b3",
@@ -228,6 +229,10 @@
     "codes/codes_prn208.hex": "dfb12db4e5c1aafa7b4647c8dd6528127e70186b3428381697e6fbe1593e5b98",
     "codes/codes_prn209.hex": "1a0479d3213676a68bdc71482d96cfeb1c0977794c659e7db1a6ec5bfcdb5e9f",
     "codes/codes_prn210.hex": "083bb2bd70a064c3b6ef4f31ae4bde0ef8685497be021a61284c9688239408d6",
+    "fec/bch_vectors.json": "27480c51b4a1a4e0224a33e49f236c1cfcf5e129eaf7d074a5cb05996ddfaa53",
+    "fec/crc24_vectors.json": "a40ee6997b28b815c849cde66599a949c77c3e9c61632287f29c914cf779e729",
+    "fec/interleaver_vectors.json": "bf37934e6cd18c12a77471e790d31add36b89f1ef7c55903214ec1ea1769d0e5",
+    "fec/ldpc_vectors.json": "58263196238c6f4c14008afbe768d0398983f17897e6a69eb271b35082d8eb1e",
     "frames/frame_boundary.bin": "9d53f4cc5fa3ffe2f6c132b668def7186deab55bb8ff46b55a3234e125fcacca",
     "frames/frame_boundary_max_fields.bin": "32b12d282958e048f07e8f9b0e0296f2598d2dbc9c8e22eda271779b9b4050d9",
     "frames/frame_message_1.bin": "a360d6dcc9dfc488989aaaaabeaf5ff1536aef605b6424bbc3c5f021bda68b19",

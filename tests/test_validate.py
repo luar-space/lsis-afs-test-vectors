@@ -470,12 +470,14 @@ def test_no_args_shows_help_and_errors() -> None:
         "check-signals",
         "check-decode",
         "check-parsed",
+        "check-fec",
         "diff",
         "diff-frames",
         "diff-inputs",
         "diff-signals",
         "diff-decode",
         "diff-parsed",
+        "diff-fec",
         "build-canonical-inputs",
         "verify-manifest",
         "rebuild-manifest",
@@ -1218,3 +1220,94 @@ def test_manifest_covers_every_parsed_file() -> None:
     for parsed_filename, *_ in validate.PARSED_TEST_VECTORS:
         rel = f"parsed/{parsed_filename}"
         assert rel in files, f"{rel} missing from manifest"
+
+
+# ─────────────────────────────── FEC component vectors ──────────────────────
+
+_FEC_FILES = (
+    "bch_vectors.json",
+    "crc24_vectors.json",
+    "interleaver_vectors.json",
+    "ldpc_vectors.json",
+)
+
+
+def _copy_fec(dest: Path) -> None:
+    dest.mkdir()
+    for name in _FEC_FILES:
+        (dest / name).write_bytes((REPO_ROOT / "fec" / name).read_bytes())
+
+
+def test_check_fec_passes() -> None:
+    """check-fec must pass on the shipped fec/*.json (structure + self-consistency + BCH anchor)."""
+    result = run("check-fec")
+    assert result.returncode == 0, result.stderr
+    assert "FEC component oracle: 4/4 files" in result.stdout
+    assert "pass structure" in result.stdout
+
+
+def test_diff_fec_self_is_clean(tmp_path: Path) -> None:
+    """Comparing fec/ against a copy of itself must report 4/4 files match."""
+    other = tmp_path / "fec-copy"
+    _copy_fec(other)
+    result = run("diff-fec", str(other))
+    assert result.returncode == 0, result.stderr
+    assert "Compared 4/4 FEC vector files" in result.stdout
+    assert "all FEC component vectors match" in result.stdout
+
+
+def test_diff_fec_detects_codeword_mutation(tmp_path: Path) -> None:
+    """A flipped BCH codeword bit must be reported by diff-fec."""
+    other = tmp_path / "fec-mutated"
+    _copy_fec(other)
+    bch_path = other / "bch_vectors.json"
+    doc = json.loads(bch_path.read_text())
+    doc["vectors"][0]["codeword_bits"][0] ^= 1
+    bch_path.write_text(json.dumps(doc))
+    result = run("diff-fec", str(other))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "bch_vectors.json" in combined
+    assert "codeword_bits" in combined
+
+
+def test_check_fec_bch_frame_anchor() -> None:
+    """check-fec's BCH frame-anchor must catch a codeword that no longer matches frames/.
+
+    Flips a bit on the (fid=0, toi=0) vector and recomputes its hex so
+    self-consistency still passes — leaving the frame-anchor as the only
+    failing check.  Mutates fec/ in place under try/finally (mirrors the
+    check-parsed mutation tests).
+    """
+    bch_path = REPO_ROOT / "fec" / "bch_vectors.json"
+    original = bch_path.read_text()
+    doc = json.loads(original)
+    v = doc["vectors"][0]
+    assert (v["fid"], v["toi"]) == (0, 0)
+    v["codeword_bits"][0] ^= 1
+    v["codeword_hex"] = validate._pack_bits_msbfirst(bytes(v["codeword_bits"]))
+    try:
+        bch_path.write_text(json.dumps(doc))
+        result = run("check-fec")
+        assert result.returncode != 0
+        assert "frame-anchor" in (result.stdout + result.stderr)
+    finally:
+        bch_path.write_text(original)
+
+
+def test_manifest_covers_every_fec_file() -> None:
+    """Every shipped fec/*.json must be SHA-pinned in manifest.json."""
+    manifest = json.loads((REPO_ROOT / "manifest.json").read_text())
+    files = manifest["files"]
+    for name in _FEC_FILES:
+        rel = f"fec/{name}"
+        assert rel in files, f"{rel} missing from manifest"
+
+
+def test_check_fec_exits_cleanly_without_frames(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """check-fec must exit 2 (not raise) if frames/ is absent — the BCH
+    frame-anchor needs it, and a sparse checkout shouldn't crash the oracle."""
+    monkeypatch.setattr(validate, "FRAMES_DIR", tmp_path / "no-frames")
+    assert validate.cmd_check_fec() == 2
