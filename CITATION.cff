@@ -20,7 +20,7 @@ keywords:
   - test-vectors
   - interoperability
 version: "0.5.0"
-date-released: "2026-05-06"
+date-released: "2026-05-18"
 license: Apache-2.0
 repository-code: "https://github.com/luar-space/lsis-afs-test-vectors"
 abstract: >-
