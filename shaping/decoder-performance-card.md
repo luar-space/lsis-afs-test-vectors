@@ -124,12 +124,22 @@ harness), which also removes the fairness/comparability risk. Two paths, same
 ### Tiering
 
 `core` (MUST — the comparable contract: identity/config, channel, methodology
-incl. uniform-random messages, fixed Eb/N0 grid, LDPC waterfall, SB1
-frame-detection, spec-compliance verdict, reference-vector anchor) ·
-`extended` (SHOULD — convergence, quantization, all-zero-vs-random symmetry) ·
-`full` (MAY — α sweep, error floor, Shannon gap, forensics; lunalink ships
-this as the reference exemplar). `perf-card diff` compares **core-only**
-regardless of tier.
+incl. **`message_ensemble: "uniform_random"` mandatory at every tier**,
+fixed Eb/N0 grid, LDPC waterfall, SB1 frame-detection, spec-compliance
+verdict, reference-vector anchor) · `extended` (SHOULD — convergence,
+quantization) · `full` (MAY — α sweep, error floor, Shannon gap,
+forensics; lunalink ships this as the reference exemplar). `perf-card diff`
+compares **core-only** regardless of tier.
+
+🟡 *Note: the all-zero-vs-random symmetry test is **not** part of any
+tier.* In a finite-iteration sum-product decoder the all-zero codeword
+converges in fewer iterations than a random codeword (the initial LLRs
+are all positive-biased), so under realistic max-iteration budgets the
+two ensembles produce different FERs — observed in lunalink's
+characterisation as 0/15000 (all-zero) vs 132/15000 (random) at 1.2 dB.
+This is honest iteration-budget asymmetry, not a decoder defect, and
+mandating `uniform_random` at every tier sidesteps it without losing
+operational realism (real nav data is random).
 
 ### Source / engine
 
@@ -297,8 +307,8 @@ compares only the `core` fields, so a `core` adopter is comparable with a
   // ─── Extended tier (omitted if tier == "core") ────────────────────
   "ldpc_extended": {
     "convergence_cdf": [/* … */],
-    "quantisation":    [/* … */],
-    "symmetry":        {/* … */}
+    "quantisation":    [/* … */]
+    // (symmetry block intentionally removed — see tiering note above)
   },
 
   // ─── Full tier (omitted if tier < "full") ─────────────────────────
