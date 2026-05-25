@@ -90,8 +90,8 @@ decoupled onto branch `perf-card-standard` off `main`. Not in v0.5.0.)
 
 | Metric | Code(s) | Captures | Why its own section |
 |---|---|---|---|
-| **LDPC waterfall** | SF2, SF3/SF4 (spec-pinned H, rate 1/2) | BER/FER vs Eb/N0 + `BER<1e-5 @ SNR>0 dB` verdict | high implementation spread (~1 dB: algorithm, iterations, LLR scaling, fixed-point, puncturing/filler) — the rich differentiator |
-| **SB1/BCH frame-detection** | SB1 BCH(51,8) | FID/TOI recovery rate vs Eb/N0 | low spread but operationally *gating* (fail SB1 → whole frame lost) and a **different** PDF metric; soft-ML vs hard-BDD is the one real axis |
+| **LDPC waterfall** | SF2, SF3/SF4 (spec-pinned H, rate 1/2) | BER/FER vs Eb/N0 + `BER<1e-5 @ Es/N0≥0 dB` verdict | high implementation spread (~1 dB: algorithm, iterations, LLR scaling, fixed-point, puncturing/filler) — the rich differentiator |
+| 🟡 **SB1/BCH frame-detection** | SB1 BCH(51,8) | FID/TOI recovery rate vs Eb/N0 + `FER<0.01 @ Es/N0≥0 dB` verdict (= interop PDF "Frame Detection > 99%") | low spread but operationally *gating* (fail SB1 → whole frame lost); a **different** PDF metric. Adopters report whichever decoder family they built; a `decoder_class` tag (`hard_ML`/`soft_ML`/`BDD`/`other`) records the family for context — the standard does **not** require shipping both |
 
 CRC-24 is **instrumentation** (frame-failure detector), not a measured
 subject. Codes are **spec-fixed** (LSIS Annex 1 / §2.4.3.1.2) — the fairness
@@ -133,21 +133,256 @@ regardless of tier.
 
 ### Source / engine
 
-lunalink `task ldpc-algo-card` → `sp_results.json` (the schema target),
-rendered by `plot_algo_card.py`; `ldpc_algo_card.rst` is the full-tier
-exemplar. **No PocketSDR** — a statistical claim's oracle is a fully specified
+🟡 **LDPC side** — lunalink `task ldpc-algo-card` (`scripts/ldpc_characterise.cpp`)
+→ `sp_results.json`, rendered by `plot_algo_card.py`; `ldpc_algo_card.rst`
+is the full-tier exemplar.
+
+🟡 **SB1/BCH side** — characterized today in
+`cpp/tests/performance/test_bch_ber.cpp` (Catch2 unit test, runs under
+`task ber`). Same methodology as the LDPC side (BPSK-AWGN,
+σ²=1/(2·R·Eb/N0), seeds {42,137,313}, Wilson CI), but emits stdout text,
+not JSON, and grid is 6 anchors {2.0, 3.0, 4.0, 5.0, 6.0, 7.6} dB (R=9/52).
+**Buildable-spec gap:** lift the simulation core into a standalone
+`scripts/bch_characterise.cpp` modelled on `ldpc_characterise.cpp` so both
+codes emit into one unified `sp_results.json` (top-level `ldpc:` +
+`sb1:` blocks). Catch2 BCH tests can remain as a CI gate, asserting
+against the JSON.
+
+🟡 **Soft-vs-hard is a lunalink-internal exploration finding, not part of
+the schema.** Lunalink characterizes both decoder families to illustrate
+the gain (~1.6 dB in soft's favor); the standard's tier-core has each
+adopter report a single decoder (the one they built), tagged with
+`decoder_class ∈ {hard_ML, soft_ML, BDD, other}`. Lunalink ships **two
+algo cards** (one per family) — two instances of the schema, not an
+asymmetric extension of it.
+
+**No PocketSDR** — a statistical claim's oracle is a fully specified
 reproducible methodology + open tooling + reference data, not a second
 decoder.
 
-### Open knob
+### 🟡 Open knob — RESOLVED
 
-The core Eb/N0 grid (highest-leverage line). Lean: lunalink's SF2 hi-res
-table as-is (0.5→3.0 dB, 9 pts) — locates the FER≈1% cliff ±0.2 dB + the deep
-spec point; sub-1e-5 probing is extended/full.
+The core Eb/N0 grids — **two of them**, because R differs between the
+codes; both anchor to a common operating point `Es/N0 = 0 dB`.
+
+🟡 **LDPC (R=1/2)** — lunalink's SF2/SF3 hi-res sweep as-is:
+{0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0} dB (**12 pts**,
+not the "0.5→3.0 dB, 9 pts" the earlier draft claimed). Dense at the
+waterfall knee + the spec point at Eb/N0 = 0 dB = Es/N0 0 dB. Sub-1e-5
+probing is extended/full tier.
+
+🟡 **SB1/BCH (R=9/52)** — lunalink's BCH waterfall sweep as-is:
+{2.0, 3.0, 4.0, 5.0, 6.0, 7.6} dB (**6 anchors**: noise floor, waterfall,
+operating point 7.6 dB ≈ Es/N0 = 0 dB at R=9/52).
+
+🟡 **Verdict bars (spec-grounded, code-family-neutral):**
+- LDPC: `BER < 1e-5 at Es/N0 ≥ 0 dB` (LSIS spec)
+- SB1/BCH: `FER < 0.01 at Es/N0 ≥ 0 dB` (interop PDF "Frame Detection > 99%")
+
+Both bars are clearable by all reasonable decoder families — so a hard-ML
+SB1 implementation can pass even though it sits ~1.6 dB worse than
+soft-ML.
+
+### 🟡 Schema strawman (`sp_results.json`)
+
+The unified algo card. Each adopter (or lunalink, as the reference
+exemplar) produces one instance. `core` blocks are mandatory; `extended`
+/ `full` blocks are present iff `tier` ≥ the corresponding level. `diff`
+compares only the `core` fields, so a `core` adopter is comparable with a
+`full` one.
+
+```jsonc
+{
+  // ─── Identity & provenance ────────────────────────────────────────
+  "schema_version": "1.0.0",
+  "tier": "full",                          // "core" | "extended" | "full"
+  "produced_by": "lunalink algo-card@<commit>",
+  "produced_at": "2026-05-25T12:00:00Z",
+  "reference_anchor": {
+    "repo":   "luar-space/lsis-afs-test-vectors",
+    "tag":    "v0.6.0",
+    "commit": "<sha>"
+  },
+  "elapsed_seconds": 1234.5,
+  "threads": 8,
+
+  // ─── Operating point (anchors both codes) ─────────────────────────
+  "operating_point": {
+    "system_es_n0_db": 0.0,
+    "notes": "LSIS spec SNR ≥ 0 dB. Each code's Eb/N0 derives via its rate."
+  },
+
+  // ─── Channel (lifted from C++ so adopters can verify config) ──────
+  "channel": {
+    "model":          "BPSK-AWGN",
+    "sigma_formula":  "1 / sqrt(2 * R * 10^(Eb_N0_db/10))",
+    "llr_formula":    "2 * y / sigma^2",
+    "symbol_mapping": "bit 0 → +1, bit 1 → −1"
+  },
+
+  // ─── Methodology (lifted from C++) ────────────────────────────────
+  "methodology": {
+    "seeds":            [42, 137, 313],
+    "message_ensemble": "uniform_random",
+    "ci_method":        "wilson_95"
+  },
+
+  // ─── LDPC metric (one decoder, per-subframe) ──────────────────────
+  "ldpc": {
+    "decoder":           "sum-product",
+    "algorithm":         "Layered Sum-Product BP (phi-transform)",
+    "arithmetic":        "float64",
+    "max_iterations":    50,
+    "early_termination": "syndrome check every iteration",
+    "subframes": {
+      "SF2": {
+        "code": {"k": 1200, "n": 2400, "rate": "1/2",
+                 "spec_ref": "LSIS V1.0 §2.4.3.1.2"},
+        "frames_per_seed": 5000,
+        "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0],
+        "waterfall": [
+          {"eb_n0_db": 0.2, "fer": 0.99, "ber": 0.42, "ci_fer": 0.0015,
+           "frames": 15000, "frame_errors": 14850, "bit_errors": 7560000,
+           "total_bits": 18000000, "not_converged": 14850}
+          // … one entry per grid point
+        ],
+        "verdict": {
+          "criterion":    "BER < 1e-5 at Es/N0 ≥ 0 dB",
+          "at_eb_n0_db":  0.0,           // = Es/N0 0 dB at R=1/2
+          "ber":          0.0,
+          "pass":         true
+        }
+      },
+      "SF3_SF4": {                       // same code; reported once
+        "code": {"k": 870, "n": 1740, "rate": "1/2",
+                 "spec_ref": "LSIS V1.0 §2.4.3.1.2",
+                 "applies_to": ["SF3", "SF4"]},
+        "frames_per_seed": 5000,
+        "eb_n0_grid_db": [/* same density as SF2 */],
+        "waterfall":     [/* … */],
+        "verdict":       {/* same shape as SF2 */}
+      }
+    }
+  },
+
+  // ─── SB1/BCH metric (one decoder per card; family tagged) ─────────
+  "sb1": {
+    "code": {
+      "k": 9, "n": 52, "rate": "9/52",
+      "codebook_size": 400, "structure": "4 FIDs × 100 TOIs",
+      "spec_ref": "LSIS V1.0 Tables 13/14 + §2.4.3.1.1"
+    },
+    "decoder": {
+      "name":      "bch_decode_soft",
+      "class":     "soft_ML",            // hard_ML | soft_ML | BDD | other
+      "algorithm": "exhaustive ML over inner-product LLR"
+    },
+    "frame_error_definition":
+      "decoded FID ≠ transmitted OR decoded TOI ≠ transmitted",
+    "frames_per_seed": 3000,
+    "eb_n0_grid_db": [2.0, 3.0, 4.0, 5.0, 6.0, 7.6],
+    "waterfall": [
+      {"eb_n0_db": 2.0, "fer": 0.18, "ci_fer": 0.008,
+       "frame_errors": 1620, "frames": 9000}
+      // … one entry per grid point
+    ],
+    "verdict": {
+      "criterion":   "FER < 0.01 at Es/N0 ≥ 0 dB",  // ← interop PDF "Frame Detection > 99%"
+      "at_eb_n0_db": 7.6,                           // = Es/N0 0 dB at R=9/52
+      "fer":         0.0,
+      "pass":        true
+    }
+  },
+
+  // ─── Extended tier (omitted if tier == "core") ────────────────────
+  "ldpc_extended": {
+    "convergence_cdf": [/* … */],
+    "quantisation":    [/* … */],
+    "symmetry":        {/* … */}
+  },
+
+  // ─── Full tier (omitted if tier < "full") ─────────────────────────
+  "ldpc_full": {
+    "error_floor":       {/* … */},
+    "error_patterns":    [/* … */],
+    "saturation_stress": {/* … */}
+  }
+}
+```
+
+#### Design choices the strawman commits to
+
+| Choice | Picked | Alternative considered |
+|---|---|---|
+| One file or two | **Unified** `sp_results.json` with `ldpc:` + `sb1:` blocks | Separate files combined upstream |
+| Verdict anchor | **`operating_point.system_es_n0_db = 0.0`**; each code names its own Eb/N0 for that Es/N0 | Same Eb/N0 number for both codes (different physical SNR — apples-to-oranges) |
+| BCH shape | **One decoder per card**, `decoder_class` tag; lunalink ships two cards to show soft-vs-hard | Per-point hard/soft columns (forces every adopter to ship both) |
+| SF3 / SF4 (identical code) | **One block `SF3_SF4`** with `applies_to: ["SF3","SF4"]` | Two duplicate blocks |
+| Tier blocks | **Top-level `tier` field + `ldpc_extended` / `ldpc_full` keys at top level**, present iff tier ≥ that level | Nest extended/full inside each code block |
+| LDPC ↔ SB1 asymmetry | **Visible** — LDPC has `subframes:{}`, SB1 doesn't; SB1 has `decoder.class`, LDPC doesn't | Force symmetry (awkward — one subframe of LDPC, one decoder of BCH) |
+| Methodology / channel placement | **Top level** (shared across both codes — same C++ already shares them) | Per-code (allows divergence but no current need) |
+
+#### Out of scope (call-outs)
+
+- **Soft-vs-hard delta is not a schema field.** Lunalink demonstrates it by publishing two cards; `diff` reports each card's verdict independently.
+- **PocketSDR is not invoked.** Cards are pure simulation + adapter; the L4 *correctness* oracle (which uses PocketSDR) is a separate axis.
+- **L3-style C/N₀ end-to-end performance is not measured here** — different axis (acquisition-gated, not decoder-block).
 
 ---
 
-## Requirements (R)
+## 🟡 Pinned-scope requirements (R') and fit check
+
+The pinned standard scope above redefines what's being shaped — away from
+the older TC5-negative-vectors framing (R0–R8, kept as audit trail
+below). R' states what the **pinned scope** must satisfy; the fit check
+shows how.
+
+### R' — Requirements for the pinned scope
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| **R'0** | Publish an oracle-backed, reproducible benchmark of FEC *decoding* performance covering both LSIS-AFS codes (LDPC SF2/SF3-SF4 + SB1/BCH) — the L4 *robustness under noise* axis, distinct from L4 *correctness* already shipped | Core goal |
+| **R'1** | Two measured curves, both anchored to a common operating point (Es/N0 = 0 dB), with spec-grounded verdict bars: LDPC `BER<1e-5 @ Es/N0≥0 dB` (LSIS spec) + SB1/BCH `FER<0.01 @ Es/N0≥0 dB` (interop PDF "Frame Detection > 99%") | Must-have |
+| **R'2** | Methodology integrity: (a) no reimplementation of LDPC/BCH/CRC in the harness; (b) the comparability oracle is a fully-specified reproducible methodology + open tooling + shipped reference vectors — **no** second decoder, **no** PocketSDR; (c) each algo card cites the shipped reference vector set (commit/tag) as its anchor | Must-have |
+| **R'3** | Adopter contract is stdio: the harness owns methodology (pinned seeds, σ²=1/(2·R·Eb/N0), grids, Wilson CI, JSON emit); adopters supply only a decode adapter for `code ∈ {SB1, SF2, SF3}` — LLRs + σ² in → info bits out. Language-neutral. Two paths: easy (harness runs adapter) or fallback (produce JSON from spec, then `perf-card validate`) | Must-have |
+| **R'4** | Unified algo card output `sp_results.json` with top-level `ldpc:` and `sb1:` blocks; methodology / channel / grids / verdicts / `reference_anchor` are explicit JSON fields (not buried in source code). Tiered: `core` (MUST — the comparable contract) · `extended` (SHOULD) · `full` (MAY). `diff` compares only core regardless of tier, so a core-only adopter is comparable with a full-tier one | Must-have |
+| **R'5** | Code-family-neutral: an adopter shipping a single decoder per code (any family — hard-ML, soft-ML, BDD, sum-product variant) produces a valid algo card. A `decoder_class ∈ {hard_ML, soft_ML, BDD, other}` tag records family for context. The standard does **not** require shipping both hard and soft. Soft-vs-hard is lunalink's internal exploration, published as two algo cards (two schema instances), not an asymmetric schema | Must-have |
+| **R'6** | Lunalink ships the full-tier reference exemplar `sp_results.json` (LDPC + SB1) as the canonical instance of the schema — proof-of-existence that the standard is buildable, and the natural target for `diff` during round-robin | Should-have |
+
+### R' × Pinned Scope fit check
+
+| Req | Requirement | Status | Pinned Scope |
+|-----|-------------|--------|:------------:|
+| R'0 | Oracle-backed FEC-decoding benchmark, both codes, L4 robustness axis | Core goal | ✅ |
+| R'1 | Two curves at common Es/N0=0 dB anchor + spec-grounded verdicts | Must-have | ✅ |
+| R'2 | Methodology integrity (no-reimpl + no-PocketSDR + ref-anchor) | Must-have | ✅ |
+| R'3 | Stdio adopter contract; harness owns methodology; two paths | Must-have | ✅ |
+| R'4 | Unified algo card with explicit JSON fields + tiered schema | Must-have | ✅ |
+| R'5 | Code-family-neutral; `decoder_class` tag; one decoder per card | Must-have | ✅ |
+| R'6 | Lunalink full-tier exemplar | Should-have | ✅ |
+
+**Notes:** the fit check is on the *design*, not the implementation. The
+pinned scope addresses every R'. Implementation gaps remain — tracked
+below.
+
+### 🟡 Unsolved (implementation work derived from R')
+
+| Item | Origin | Next step |
+|------|--------|-----------|
+| BCH characterization is a Catch2 test → stdout, not JSON | R'4, R'6 | lunalink: lift simulation core into `scripts/bch_characterise.cpp` |
+| LDPC `sp_results.json` doesn't yet surface methodology / channel / grid / verdict / `reference_anchor` as explicit fields | R'4 | lunalink: extend `ldpc_characterise.cpp` to emit these blocks |
+| No unified harness emitting one `sp_results.json` from both codes | R'4, R'6 | lunalink: wrapper task or single binary running both characterise tools |
+| `perf-card` harness (`run` / `validate` / `diff` / `--self-test`) not yet implemented | R'3 | repo: build once schema is concrete |
+| Reference vector set for `--self-test` not yet shipped | R'2(c) | repo: concurrent with harness |
+
+🟡 Strawman parked above (`### Schema strawman`) — the first item is no
+longer outstanding. R'6 (lunalink exemplar) still materializes only once
+the lunalink-side work lands; until then it is design-✅ but
+implementation-pending.
+
+---
+
+## Requirements (R) — historical (TC5 negative-vectors framing, superseded by R' above)
 
 | ID | Requirement | Status |
 |----|-------------|--------|
