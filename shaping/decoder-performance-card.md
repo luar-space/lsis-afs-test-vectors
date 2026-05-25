@@ -367,18 +367,27 @@ below.
 
 ### 🟡 Unsolved (implementation work derived from R')
 
-| Item | Origin | Next step |
-|------|--------|-----------|
-| BCH characterization is a Catch2 test → stdout, not JSON | R'4, R'6 | lunalink: lift simulation core into `scripts/bch_characterise.cpp` |
-| LDPC `sp_results.json` doesn't yet surface methodology / channel / grid / verdict / `reference_anchor` as explicit fields | R'4 | lunalink: extend `ldpc_characterise.cpp` to emit these blocks |
-| No unified harness emitting one `sp_results.json` from both codes | R'4, R'6 | lunalink: wrapper task or single binary running both characterise tools |
-| `perf-card` harness (`run` / `validate` / `diff` / `--self-test`) not yet implemented | R'3 | repo: build once schema is concrete |
-| Reference vector set for `--self-test` not yet shipped | R'2(c) | repo: concurrent with harness |
+| Status | Item | Origin | Where / next step |
+|:------:|------|--------|-------------------|
+| 🟡 ✅ | BCH characterization packaged as a JSON-emitting standalone tool | R'4, R'6 | lunalink `interop/bch-characterise`@44fbd94 — `scripts/bch_characterise.cpp` |
+| 🟡 ✅ | LDPC `sp_results.json` surfaces methodology / channel / `operating_point` as explicit top-level JSON fields | R'4 | lunalink `interop/bch-characterise`@f73c367 — additive `ldpc_characterise.cpp` patch (existing keys unchanged, `plot_algo_card.py` unaffected) |
+| 🟡 ✅ | Unified harness emitting one `sp_results.json` from both codes | R'4, R'6 | lunalink `interop/bch-characterise`@f73c367 — `scripts/make_algo_card.py` + `task algo-card` (emits `sp_results_{soft,hard}.json`, ~23 KB each, full tier) |
+| open | `perf-card` harness (`run` / `validate` / `diff` / `--self-test`) | R'3 | repo: build once schema is concrete (next phase) |
+| open | Reference vector set for `--self-test` | R'2(c) | repo: concurrent with harness |
 
-🟡 Strawman parked above (`### Schema strawman`) — the first item is no
-longer outstanding. R'6 (lunalink exemplar) still materializes only once
-the lunalink-side work lands; until then it is design-✅ but
-implementation-pending.
+🟡 **R'6 (lunalink full-tier exemplar) is now both design-✅ AND
+implementation-✅.** End-to-end verified: `task algo-card` produces both
+algo cards with LDPC + methodology blocks byte-identical across families,
+differing only in `sb1:`. Sample run:
+
+- **Soft card**: LDPC SF2/SF3-SF4 verdict `BER<1e-5 @ Es/N0≥0 dB` cleared
+  at Eb/N0 = 2.0 dB (BER=0 measured); SB1 soft-ML verdict
+  `FER<0.01 @ Es/N0≥0 dB` cleared at Eb/N0 = 7.6 dB (FER=0, 0/30000).
+- **Hard card**: identical LDPC; SB1 hard-ML verdict cleared at
+  Eb/N0 = 7.6 dB (FER=3.3e-5, 1/30000) — ~10× higher than soft but well
+  under the 0.01 bar, as the family-neutral verdict was designed to be.
+
+Remaining 2 open items are repo-side (lsis-afs-test-vectors).
 
 ---
 
