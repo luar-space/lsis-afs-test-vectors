@@ -125,11 +125,20 @@ harness), which also removes the fairness/comparability risk. Two paths, same
 
 `core` (MUST — the comparable contract: identity/config, channel, methodology
 incl. **`message_ensemble: "uniform_random"` mandatory at every tier**,
-fixed Eb/N0 grid, LDPC waterfall, SB1 frame-detection, spec-compliance
-verdict, reference-vector anchor) · `extended` (SHOULD — convergence,
-quantization) · `full` (MAY — α sweep, error floor, Shannon gap,
-forensics; lunalink ships this as the reference exemplar). `perf-card diff`
-compares **core-only** regardless of tier.
+fixed Eb/N0 grid, LDPC waterfall, **operating-point quantisation table**,
+SB1 frame-detection, spec-compliance verdict, reference-vector anchor) ·
+`extended` (SHOULD — convergence-CDF, loss-budget) · `full` (MAY — α
+sweep, error floor, Shannon gap, forensics; lunalink ships this as the
+reference exemplar). `perf-card diff` compares **core-only** regardless
+of tier.
+
+🟡 *Note: internal decoder arithmetic (float, int8, fixed-point, …) is
+**not** a structured schema field.* It's self-declared and unverifiable,
+and "performance under quantised inputs" is what actually distinguishes
+implementations — characterised observably by the operating-point
+quantisation table now in tier-core. If an adopter wants to describe
+their internal representation, they can put it in `decoder.notes`; `diff`
+never reads it.
 
 🟡 *Note: the all-zero-vs-random symmetry test is **not** part of any
 tier.* In a finite-iteration sum-product decoder the all-zero codeword
@@ -241,9 +250,24 @@ compares only the `core` fields, so a `core` adopter is comparable with a
   "ldpc": {
     "decoder":           "sum-product",
     "algorithm":         "Layered Sum-Product BP (phi-transform)",
-    "arithmetic":        "float64",
+    // (arithmetic field intentionally absent — internal precision is
+    // self-declared and unverifiable. What matters for comparison is
+    // the decoder's measured behaviour under quantised inputs, below.)
     "max_iterations":    50,
     "early_termination": "syndrome check every iteration",
+    "quantisation": [                 // TIER-CORE: operating-point sweep
+      // FER at Eb/N0 = 1.2 dB (LDPC waterfall knee for R=1/2) under
+      // peak-normalised wire LLR quantisation to N bits — characterises
+      // the decoder's sensitivity to input precision. Harness controls
+      // the quantisation function; adapter sees float32 wire LLRs that
+      // happen to lie on the N-bit grid.
+      {"config": "3bit",  "fer": 0.975, "ber": ..., "ci_fer": ..., "frames": 9000},
+      {"config": "4bit",  "fer": 0.056, "ber": ..., "ci_fer": ..., "frames": 9000},
+      {"config": "5bit",  "fer": 0.014, "ber": ..., "ci_fer": ..., "frames": 9000},
+      {"config": "6bit",  "fer": 0.011, "ber": ..., "ci_fer": ..., "frames": 9000},
+      {"config": "8bit",  "fer": 0.009, "ber": ..., "ci_fer": ..., "frames": 9000},
+      {"config": "float", "fer": 0.009, "ber": ..., "ci_fer": ..., "frames": 9000}
+    ],
     "subframes": {
       "SF2": {
         "code": {"k": 1200, "n": 2400, "rate": "1/2",
@@ -307,7 +331,8 @@ compares only the `core` fields, so a `core` adopter is comparable with a
   // ─── Extended tier (omitted if tier == "core") ────────────────────
   "ldpc_extended": {
     "convergence_cdf": [/* … */],
-    "quantisation":    [/* … */]
+    "loss_budget":     {/* … */}
+    // (quantisation moved to tier-core — see ldpc.quantisation above)
     // (symmetry block intentionally removed — see tiering note above)
   },
 
@@ -331,10 +356,13 @@ compares only the `core` fields, so a `core` adopter is comparable with a
 | Tier blocks | **Top-level `tier` field + `ldpc_extended` / `ldpc_full` keys at top level**, present iff tier ≥ that level | Nest extended/full inside each code block |
 | LDPC ↔ SB1 asymmetry | **Visible** — LDPC has `subframes:{}`, SB1 doesn't; SB1 has `decoder.class`, LDPC doesn't | Force symmetry (awkward — one subframe of LDPC, one decoder of BCH) |
 | Methodology / channel placement | **Top level** (shared across both codes — same C++ already shares them) | Per-code (allows divergence but no current need) |
+| 🟡 Internal decoder arithmetic | **Not a structured field** — self-declared, unverifiable. If anything, free-text in `decoder.notes`. | Structured `arithmetic` field (`"float64"` / `"int8"` / …) that `diff` reads |
+| 🟡 Quantisation tier | **Tier-core**: operating-point quantisation table (FER at fixed Eb/N0 across {3, 4, 5, 6, 8, float} bit wire LLRs) lives in `ldpc.quantisation` alongside the subframes | Tier-extended only (deferred from headline comparison) |
 
 #### Out of scope (call-outs)
 
 - **Soft-vs-hard delta is not a schema field.** Lunalink demonstrates it by publishing two cards; `diff` reports each card's verdict independently.
+- **Internal decoder representation (`float` / `int8` / fixed-point) is not a comparison field.** What matters observably is "FER vs input precision," characterised by the operating-point quantisation table in tier-core. The adapter's internal arithmetic is opaque and irrelevant to `diff`.
 - **PocketSDR is not invoked.** Cards are pure simulation + adapter; the L4 *correctness* oracle (which uses PocketSDR) is a separate axis.
 - **L3-style C/N₀ end-to-end performance is not measured here** — different axis (acquisition-gated, not decoder-block).
 
