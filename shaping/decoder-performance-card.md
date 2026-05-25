@@ -86,6 +86,24 @@ ships the harness and other teams adopt by supplying only a decode adapter.
 (Renamed `negative-vectors-tc5.md` → `decoder-performance-card.md`;
 decoupled onto branch `perf-card-standard` off `main`. Not in v0.5.0.)
 
+🟡 **Performance comparison ≠ interoperability.** The perf card lives in
+this repo and uses the same exchange / round-robin / tooling pattern as
+the L1–L5 interop test vectors, but it answers a different question:
+
+| | L1–L5 interop test vectors | Perf card |
+|---|---|---|
+| **Question** | "Can implementations talk to each other?" | "Whose decoder is better, and by how much?" |
+| **Output** | Bit-exact artifacts (codes / frames / signals / decoded bytes / parsed JSON) | A statistical benchmark (BER/FER curves, verdicts) |
+| **"Agreement"** | Bit-exact equality between artifacts | **Disagreement is the point** — each implementation has its own curve |
+| **Tool semantics** | `diff-*` reports pass/fail equality | `compare` reports deltas + CI overlap |
+| **Verdict** | "Do these match the reference?" | "Does this decoder clear the spec bar? How does it rank against another implementation?" |
+
+What's shared: the methodology (pinned seeds, fixed Eb/N0 grids,
+operating-point anchor) and the *exchange format* (one algo card per
+implementation). What's not: equality semantics. Two perf cards
+diverging is normal and expected; the comparison tool measures the
+divergence, not flags it.
+
 ### What it measures — two distinct metrics, reported separately
 
 | Metric | Code(s) | Captures | Why its own section |
@@ -119,7 +137,7 @@ harness), which also removes the fairness/comparability risk. Two paths, same
 - **Easy (default):** `perf-card run --decoder ./adapter --tier core`; shipped
   adapter stubs (Py/C/Rust) + `--self-test` vs a shipped reference vector set.
 - **Independent (fallback):** produce JSON from the written standard;
-  `perf-card validate` / `diff`.
+  `perf-card validate` / `compare`.
 
 ### Tiering
 
@@ -129,7 +147,8 @@ fixed Eb/N0 grid, LDPC waterfall, SB1 frame-detection, spec-compliance
 verdict, reference-vector anchor) · `extended` (SHOULD — convergence-CDF,
 loss-budget, wire-LLR quantisation sweep) · `full` (MAY — α sweep, error
 floor, Shannon gap, forensics; lunalink ships this as the reference
-exemplar). `perf-card diff` compares **core-only** regardless of tier.
+exemplar). `perf-card compare` operates on **core-only** fields
+regardless of tier.
 
 🟡 *Note: internal decoder arithmetic (float, int8, fixed-point, …) is
 **not** a structured schema field.* It's self-declared and unverifiable.
@@ -139,7 +158,7 @@ informational, not a tier-core comparison axis. If a hardware-target
 implementation enters the pool the quantisation table can be promoted
 back to tier-core without schema changes. If an adopter wants to
 describe their internal representation, they can put it in
-`decoder.notes`; `diff` never reads it.
+`decoder.notes`; `compare` never reads it.
 
 🟡 *Note: the all-zero-vs-random symmetry test is **not** part of any
 tier.* In a finite-iteration sum-product decoder the all-zero codeword
@@ -207,9 +226,9 @@ soft-ML.
 
 The unified algo card. Each adopter (or lunalink, as the reference
 exemplar) produces one instance. `core` blocks are mandatory; `extended`
-/ `full` blocks are present iff `tier` ≥ the corresponding level. `diff`
-compares only the `core` fields, so a `core` adopter is comparable with a
-`full` one.
+/ `full` blocks are present iff `tier` ≥ the corresponding level.
+`perf-card compare` reads only the `core` fields, so a `core` adopter is
+comparable with a `full` one.
 
 ```jsonc
 {
@@ -347,12 +366,12 @@ compares only the `core` fields, so a `core` adopter is comparable with a
 | Tier blocks | **Top-level `tier` field + `ldpc_extended` / `ldpc_full` keys at top level**, present iff tier ≥ that level | Nest extended/full inside each code block |
 | LDPC ↔ SB1 asymmetry | **Visible** — LDPC has `subframes:{}`, SB1 doesn't; SB1 has `decoder.class`, LDPC doesn't | Force symmetry (awkward — one subframe of LDPC, one decoder of BCH) |
 | Methodology / channel placement | **Top level** (shared across both codes — same C++ already shares them) | Per-code (allows divergence but no current need) |
-| 🟡 Internal decoder arithmetic | **Not a structured field** — self-declared, unverifiable. If anything, free-text in `decoder.notes`. | Structured `arithmetic` field (`"float64"` / `"int8"` / …) that `diff` reads |
+| 🟡 Internal decoder arithmetic | **Not a structured field** — self-declared, unverifiable. If anything, free-text in `decoder.notes`. | Structured `arithmetic` field (`"float64"` / `"int8"` / …) that `compare` reads |
 | 🟡 Wire-LLR quantisation tier | **Tier-extended** — `ldpc_extended.quantisation` sweep at one operating Eb/N0 across {3, 4, 5, 6, 8, float} bit precisions. Informational while the interop pool is software-only; promote to tier-core if a hardware-target implementation enters. | Always tier-core (over-weighted while everyone is software) · Drop entirely (loses the deployment-readiness probe) |
 
 #### Out of scope (call-outs)
 
-- **Soft-vs-hard delta is not a schema field.** Lunalink demonstrates it by publishing two cards; `diff` reports each card's verdict independently.
+- **Soft-vs-hard delta is not a schema field.** Lunalink demonstrates it by publishing two cards; `compare` reports each card's verdict independently.
 - **Internal decoder representation (`float` / `int8` / fixed-point) is not a comparison field.** It's self-declared and unverifiable. The wire-LLR quantisation sweep in `ldpc_extended.quantisation` is what would observably characterise input-precision sensitivity, but it sits at tier-extended (informational) while the interop pool is software-only — promote to tier-core if a hardware-target implementation enters.
 - **PocketSDR is not invoked.** Cards are pure simulation + adapter; the L4 *correctness* oracle (which uses PocketSDR) is a separate axis.
 - **L3-style C/N₀ end-to-end performance is not measured here** — different axis (acquisition-gated, not decoder-block).
@@ -374,9 +393,9 @@ shows how.
 | **R'1** | Two measured curves, both anchored to a common operating point (Es/N0 = 0 dB), with spec-grounded verdict bars: LDPC `BER<1e-5 @ Es/N0≥0 dB` (LSIS spec) + SB1/BCH `FER<0.01 @ Es/N0≥0 dB` (interop PDF "Frame Detection > 99%") | Must-have |
 | **R'2** | Methodology integrity: (a) no reimplementation of LDPC/BCH/CRC in the harness; (b) the comparability oracle is a fully-specified reproducible methodology + open tooling + shipped reference vectors — **no** second decoder, **no** PocketSDR; (c) each algo card cites the shipped reference vector set (commit/tag) as its anchor | Must-have |
 | **R'3** | Adopter contract is stdio: the harness owns methodology (pinned seeds, σ²=1/(2·R·Eb/N0), grids, Wilson CI, JSON emit); adopters supply only a decode adapter for `code ∈ {SB1, SF2, SF3}` — LLRs + σ² in → info bits out. Language-neutral. Two paths: easy (harness runs adapter) or fallback (produce JSON from spec, then `perf-card validate`) | Must-have |
-| **R'4** | Unified algo card output `sp_results.json` with top-level `ldpc:` and `sb1:` blocks; methodology / channel / grids / verdicts / `reference_anchor` are explicit JSON fields (not buried in source code). Tiered: `core` (MUST — the comparable contract) · `extended` (SHOULD) · `full` (MAY). `diff` compares only core regardless of tier, so a core-only adopter is comparable with a full-tier one | Must-have |
+| **R'4** | Unified algo card output `sp_results.json` with top-level `ldpc:` and `sb1:` blocks; methodology / channel / grids / verdicts / `reference_anchor` are explicit JSON fields (not buried in source code). Tiered: `core` (MUST — the comparable contract) · `extended` (SHOULD) · `full` (MAY). `compare` operates on core fields only regardless of tier, so a core-only adopter is comparable with a full-tier one | Must-have |
 | **R'5** | Code-family-neutral: an adopter shipping a single decoder per code (any family — hard-ML, soft-ML, BDD, sum-product variant) produces a valid algo card. A `decoder_class ∈ {hard_ML, soft_ML, BDD, other}` tag records family for context. The standard does **not** require shipping both hard and soft. Soft-vs-hard is lunalink's internal exploration, published as two algo cards (two schema instances), not an asymmetric schema | Must-have |
-| **R'6** | Lunalink ships the full-tier reference exemplar `sp_results.json` (LDPC + SB1) as the canonical instance of the schema — proof-of-existence that the standard is buildable, and the natural target for `diff` during round-robin | Should-have |
+| **R'6** | Lunalink ships the full-tier reference exemplar `sp_results.json` (LDPC + SB1) as the canonical instance of the schema — proof-of-existence that the standard is buildable, and the natural target for `compare` during round-robin | Should-have |
 
 ### R' × Pinned Scope fit check
 
@@ -401,7 +420,7 @@ below.
 | 🟡 ✅ | BCH characterization packaged as a JSON-emitting standalone tool | R'4, R'6 | lunalink `interop/bch-characterise`@44fbd94 — `scripts/bch_characterise.cpp` |
 | 🟡 ✅ | LDPC `sp_results.json` surfaces methodology / channel / `operating_point` as explicit top-level JSON fields | R'4 | lunalink `interop/bch-characterise`@f73c367 — additive `ldpc_characterise.cpp` patch (existing keys unchanged, `plot_algo_card.py` unaffected) |
 | 🟡 ✅ | Unified harness emitting one `sp_results.json` from both codes | R'4, R'6 | lunalink `interop/bch-characterise`@f73c367 — `scripts/make_algo_card.py` + `task algo-card` (emits `sp_results_{soft,hard}.json`, ~23 KB each, full tier) |
-| open | `perf-card` harness (`run` / `validate` / `diff` / `--self-test`) | R'3 | repo: build once schema is concrete (next phase) |
+| open | `perf-card` harness (`run` / `validate` / `compare` / `--self-test`) | R'3 | repo: build once schema is concrete (next phase) |
 | open | Reference vector set for `--self-test` | R'2(c) | repo: concurrent with harness |
 
 🟡 **R'6 (lunalink full-tier exemplar) is now both design-✅ AND
