@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import struct
 import sys
 
@@ -46,10 +47,38 @@ from lunalink.afs import (  # type: ignore[import-not-found]
 REQUEST_HEADER_FMT  = "<BHfI"
 REQUEST_HEADER_LEN  = 11
 RESPONSE_HEADER_FMT = "<BHI"
+PROTOCOL_VERSION = "1.0"
 
 # Code metadata keyed by wire code_id.
 N_INFO = {0: 9, 1: 1200, 2: 870}
 LDPC_TYPE = {1: LdpcSubframe.SF2, 2: LdpcSubframe.SF3}
+
+
+def do_handshake(stdin, stdout) -> None:
+    """Read the harness's HandshakeRequest and reply with HandshakeAck."""
+    n = struct.unpack("<I", stdin.read(4))[0]
+    _ = json.loads(stdin.read(n))  # we don't act on the request fields
+    resp = json.dumps({
+        "type": "handshake_ack",
+        "protocol_version": PROTOCOL_VERSION,
+        "adapter": {
+            "name": "lunalink ldpc_decode (sum-product, float64)",
+            "version": "1.0.0",
+            "supports_codes": ["SB1", "SF2", "SF3"],
+            "ldpc": {
+                "algorithm": "Layered Sum-Product BP (phi-transform)",
+                "early_termination": "syndrome check every iteration",
+            },
+            "sb1": {
+                "name": "lunalink bch_decode_soft",
+                "decoder_class": "soft_ML",
+                "algorithm": "exhaustive ML over inner-product LLR",
+            },
+        },
+    }).encode("utf-8")
+    stdout.write(struct.pack("<I", len(resp)))
+    stdout.write(resp)
+    stdout.flush()
 
 
 def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
@@ -90,6 +119,8 @@ def decode_ldpc(
 def main() -> int:
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
+
+    do_handshake(stdin, stdout)
 
     while True:
         hdr = stdin.read(REQUEST_HEADER_LEN)

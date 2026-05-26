@@ -18,6 +18,7 @@ Usage (paired with perf_card.py V1):
 
 from __future__ import annotations
 
+import json
 import struct
 import sys
 
@@ -28,11 +29,41 @@ N_INFO = {0: 9, 1: 1200, 2: 870}  # SB1, SF2, SF3
 REQUEST_HEADER_FMT  = "<BHfI"
 REQUEST_HEADER_LEN  = 11
 RESPONSE_HEADER_FMT = "<BHI"
+PROTOCOL_VERSION = "1.0"
+
+
+def do_handshake(stdin, stdout) -> None:
+    """Read the harness's HandshakeRequest and reply with HandshakeAck."""
+    n = struct.unpack("<I", stdin.read(4))[0]
+    _ = json.loads(stdin.read(n))  # we don't act on the request fields
+    resp = json.dumps({
+        "type": "handshake_ack",
+        "protocol_version": PROTOCOL_VERSION,
+        "adapter": {
+            "name": "perf_card mock_adapter (returns all-zero info bits)",
+            "version": "1.0.0",
+            "supports_codes": ["SB1", "SF2", "SF3"],
+            "ldpc": {
+                "algorithm": "mock (no decoding)",
+                "early_termination": "n/a",
+            },
+            "sb1": {
+                "name": "mock",
+                "decoder_class": "other",
+                "algorithm": "mock (no decoding)",
+            },
+        },
+    }).encode("utf-8")
+    stdout.write(struct.pack("<I", len(resp)))
+    stdout.write(resp)
+    stdout.flush()
 
 
 def main() -> int:
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
+
+    do_handshake(stdin, stdout)
 
     while True:
         hdr = stdin.read(REQUEST_HEADER_LEN)

@@ -110,6 +110,11 @@ REQUEST_HEADER_LEN  = struct.calcsize(REQUEST_HEADER_FMT)   # 11
 RESPONSE_HEADER_FMT = "<BHI"
 RESPONSE_HEADER_LEN = struct.calcsize(RESPONSE_HEADER_FMT)  # 7
 
+# Handshake protocol version. Adapters must reply with the same version.
+PROTOCOL_VERSION = "1.0"
+HARNESS_NAME = "lsis-afs perf_card"
+HARNESS_VERSION = "1.0.0"
+
 # Spec-grounded verdict bars.
 LDPC_VERDICT_BAR_BER = 1e-5
 LDPC_OPERATING_POINT_EB_N0_DB = 0.0  # = Es/N0 0 dB at R=1/2
@@ -166,6 +171,83 @@ def wilson_ci_hw(errors: int, trials: int, z: float = 1.96) -> float:
 def sigma_for_eb_n0(eb_n0_db: float, rate: float) -> float:
     """σ = 1 / sqrt(2 · R · 10^(Eb_N0_db/10))."""
     return 1.0 / math.sqrt(2.0 * rate * 10.0 ** (eb_n0_db / 10.0))
+
+
+# ─── Handshake: adapter self-declares identity at session start ──────────
+#
+# The handshake happens once per session, before any binary frame request.
+# Framing: length-prefixed JSON in each direction.
+#
+#   harness → adapter   <u32 LE n_bytes><n_bytes JSON HandshakeRequest>
+#   adapter → harness   <u32 LE n_bytes><n_bytes JSON HandshakeAck>
+#
+# After the ack, the protocol switches to the binary per-frame format
+# described above.
+
+def _send_length_prefixed_json(stream, obj: dict[str, Any]) -> None:
+    payload = json.dumps(obj).encode("utf-8")
+    stream.write(struct.pack("<I", len(payload)))
+    stream.write(payload)
+    stream.flush()
+
+
+def _recv_length_prefixed_json(stream) -> dict[str, Any]:
+    n_bytes = stream.read(4)
+    if len(n_bytes) < 4:
+        raise RuntimeError("counterparty closed stream during handshake")
+    n = struct.unpack("<I", n_bytes)[0]
+    payload = stream.read(n)
+    if len(payload) < n:
+        raise RuntimeError(
+            f"counterparty closed stream mid-handshake "
+            f"(got {len(payload)} bytes, expected {n})"
+        )
+    return json.loads(payload)
+
+
+def handshake_with_adapter(proc: subprocess.Popen[bytes]) -> dict[str, Any]:
+    """Run the protocol handshake; return the adapter's self-description."""
+    assert proc.stdin is not None and proc.stdout is not None
+    _send_length_prefixed_json(proc.stdin, {
+        "type": "handshake",
+        "protocol_version": PROTOCOL_VERSION,
+        "harness": {"name": HARNESS_NAME, "version": HARNESS_VERSION},
+    })
+    resp = _recv_length_prefixed_json(proc.stdout)
+    if resp.get("type") != "handshake_ack":
+        raise RuntimeError(
+            f"adapter returned wrong handshake type: {resp.get('type')!r}"
+        )
+    if resp.get("protocol_version") != PROTOCOL_VERSION:
+        raise RuntimeError(
+            f"adapter protocol_version mismatch: "
+            f"got {resp.get('protocol_version')!r}, "
+            f"expected {PROTOCOL_VERSION!r}"
+        )
+    adapter = resp.get("adapter")
+    if not isinstance(adapter, dict):
+        raise RuntimeError(f"adapter block missing or malformed: {resp}")
+    return adapter
+
+
+def adapter_decoder_meta(adapter_info: dict[str, Any]) -> dict[str, str]:
+    """Extract LDPC decoder_meta from a handshake response."""
+    ldpc = adapter_info.get("ldpc", {})
+    return {
+        "name": adapter_info.get("name", "adapter"),
+        "algorithm": ldpc.get("algorithm", "unspecified"),
+        "early_termination": ldpc.get("early_termination", "unspecified"),
+    }
+
+
+def adapter_sb1_meta(adapter_info: dict[str, Any]) -> dict[str, str]:
+    """Extract SB1 decoder_meta from a handshake response."""
+    sb1 = adapter_info.get("sb1", {})
+    return {
+        "name": sb1.get("name", adapter_info.get("name", "adapter")),
+        "class": sb1.get("decoder_class", "other"),
+        "algorithm": sb1.get("algorithm", "unspecified"),
+    }
 
 
 # ─── Per-frame round-trip with the adapter ───────────────────────────────
@@ -572,15 +654,15 @@ def run_harness(
     code_ids: list[int],
     frames_per_seed: int,
     max_iters: int,
-    decoder_meta: dict[str, str],
-    sb1_decoder_meta: dict[str, str],
     reference_anchor: dict[str, str],
     tier: str = "core",
 ) -> dict[str, Any]:
-    """Spawn the adapter, run the full sweep (+ tier-extended/full probes
-    where applicable), return the algo card dict.
+    """Spawn the adapter, run the handshake, run the full sweep (+ tier-
+    extended/full probes where applicable), return the algo card dict.
 
-    Shared core between `run` and `self-test`.
+    Shared core between `run` and `self-test`. Adapter identity (decoder
+    name / algorithm / class) is taken from the handshake response — no
+    longer passed via CLI flags.
     """
     print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
     print(
@@ -593,6 +675,14 @@ def run_harness(
         decoder_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+    )
+
+    # Handshake first — failures here surface as RuntimeError, harness aborts.
+    adapter_info = handshake_with_adapter(proc)
+    print(
+        f"[harness] handshake ok — adapter: {adapter_info.get('name', '?')} "
+        f"(supports: {adapter_info.get('supports_codes', '?')})",
+        file=sys.stderr,
     )
 
     sweep: dict[int, list[GridPoint]] = {}
@@ -622,8 +712,8 @@ def run_harness(
         sweep=sweep,
         frames_per_seed=frames_per_seed,
         max_iters=max_iters,
-        decoder_meta=decoder_meta,
-        sb1_decoder_meta=sb1_decoder_meta,
+        decoder_meta=adapter_decoder_meta(adapter_info),
+        sb1_decoder_meta=adapter_sb1_meta(adapter_info),
         reference_anchor=reference_anchor,
         elapsed_s=elapsed_s,
         tier=tier,
@@ -639,16 +729,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     code_ids = [CODE_BY_NAME[c] for c in requested]
 
-    decoder_meta = {
-        "name": args.decoder_name,
-        "algorithm": args.decoder_algorithm,
-        "early_termination": args.decoder_early_termination,
-    }
-    sb1_decoder_meta = {
-        "name": args.sb1_decoder_name or args.decoder_name,
-        "class": args.sb1_decoder_class,
-        "algorithm": args.sb1_decoder_algorithm or args.decoder_algorithm,
-    }
     reference_anchor: dict[str, str] = {"repo": args.reference_anchor_repo}
     if args.reference_anchor_tag:
         reference_anchor["tag"] = args.reference_anchor_tag
@@ -660,8 +740,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         code_ids=code_ids,
         frames_per_seed=args.frames_per_seed,
         max_iters=args.max_iters,
-        decoder_meta=decoder_meta,
-        sb1_decoder_meta=sb1_decoder_meta,
         reference_anchor=reference_anchor,
         tier=args.tier,
     )
@@ -1105,27 +1183,9 @@ def cmd_self_test(args: argparse.Namespace) -> int:
         return 2
 
     ref_card = json.loads(reference.read_text(encoding="utf-8"))
-
-    # Mirror the reference card's adapter identity so the fresh card
-    # carries the same metadata (matters for `compare`'s identity block).
-    ldpc_meta = ref_card.get("ldpc", {})
-    sb1_meta = ref_card.get("sb1", {}).get("decoder", {})
-    decoder_meta = {
-        "name": ldpc_meta.get("decoder", "adapter"),
-        "algorithm": ldpc_meta.get("algorithm", "unspecified"),
-        "early_termination": ldpc_meta.get("early_termination", "unspecified"),
-    }
-    sb1_decoder_meta = {
-        "name": sb1_meta.get("name", decoder_meta["name"]),
-        "class": sb1_meta.get("class", "other"),
-        "algorithm": sb1_meta.get("algorithm", decoder_meta["algorithm"]),
-    }
     reference_anchor = ref_card.get("reference_anchor", {})
 
-    print(
-        f"[self-test] reference: {reference}",
-        file=sys.stderr,
-    )
+    print(f"[self-test] reference: {reference}", file=sys.stderr)
     print(
         f"[self-test] running bundled adapter at "
         f"frames_per_seed={args.frames_per_seed} "
@@ -1139,8 +1199,6 @@ def cmd_self_test(args: argparse.Namespace) -> int:
         code_ids=code_ids,
         frames_per_seed=args.frames_per_seed,
         max_iters=DEFAULT_MAX_ITERS,
-        decoder_meta=decoder_meta,
-        sb1_decoder_meta=sb1_decoder_meta,
         reference_anchor=reference_anchor,
     )
 
@@ -1232,27 +1290,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     rp.add_argument("--out", help="Path to write algo card JSON (default: stdout).")
-
-    # Adapter metadata (passed into the card; harness has no way to detect
-    # these from the binary protocol yet — V3 handshake will).
-    rp.add_argument(
-        "--decoder-name", default="adapter",
-        help="LDPC decoder name (recorded in card).",
-    )
-    rp.add_argument(
-        "--decoder-algorithm", default="unspecified",
-        help="LDPC decoder algorithm description.",
-    )
-    rp.add_argument(
-        "--decoder-early-termination", default="unspecified",
-        help="LDPC decoder early-termination strategy.",
-    )
-    rp.add_argument("--sb1-decoder-name", default=None)
-    rp.add_argument(
-        "--sb1-decoder-class", default="other",
-        choices=["hard_ML", "soft_ML", "BDD", "other"],
-    )
-    rp.add_argument("--sb1-decoder-algorithm", default=None)
 
     # Reference vector anchor (informational; harness doesn't validate against it).
     rp.add_argument(
