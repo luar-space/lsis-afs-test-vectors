@@ -555,10 +555,409 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── `validate` subcommand ───────────────────────────────────────────────
+#
+# Checks that a card conforms to the standard schema. Adopters who produce
+# cards by the fallback path (writing JSON from the written standard
+# rather than via `run`) use this to confirm their card is well-formed.
+
+# Required methodology values per the standard.
+EXPECTED_METHODOLOGY = {
+    "seeds": list(SEEDS),
+    "message_ensemble": "uniform_random",
+    "ci_method": "wilson_95",
+}
+EXPECTED_OPERATING_ES_N0_DB = 0.0
+EXPECTED_LDPC_VERDICT_CRITERION = (
+    f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB"
+)
+EXPECTED_SB1_VERDICT_CRITERION = (
+    f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB"
+)
+
+
+def _validate_waterfall_row(
+    row: dict[str, Any], row_kind: str, errors: list[str], path: str
+) -> None:
+    """Common required fields for any waterfall entry."""
+    required = ["eb_n0_db", "fer", "ci_fer", "frames", "frame_errors"]
+    if row_kind == "ldpc":
+        # LDPC rows additionally carry bit-level statistics.
+        required += ["ber", "bit_errors", "total_bits"]
+    for k in required:
+        if k not in row:
+            errors.append(f"{path}: missing key '{k}'")
+
+
+def _validate_ldpc_subframe(
+    block: dict[str, Any], label: str, errors: list[str]
+) -> None:
+    path = f"ldpc.subframes.{label}"
+    for k in ("code", "frames_per_seed", "eb_n0_grid_db", "waterfall", "verdict"):
+        if k not in block:
+            errors.append(f"{path}: missing key '{k}'")
+    if "eb_n0_grid_db" in block:
+        grid = block["eb_n0_grid_db"]
+        if list(grid) != list(LDPC_GRID):
+            errors.append(
+                f"{path}.eb_n0_grid_db: does not match pinned LDPC grid "
+                f"({list(LDPC_GRID)})"
+            )
+    if "waterfall" in block:
+        for i, row in enumerate(block["waterfall"]):
+            _validate_waterfall_row(row, "ldpc", errors, f"{path}.waterfall[{i}]")
+    if "verdict" in block and block["verdict"]:
+        v = block["verdict"]
+        if v.get("criterion") != EXPECTED_LDPC_VERDICT_CRITERION:
+            errors.append(
+                f"{path}.verdict.criterion: expected "
+                f"'{EXPECTED_LDPC_VERDICT_CRITERION}', got '{v.get('criterion')}'"
+            )
+        for k in ("at_eb_n0_db", "ber", "pass"):
+            if k not in v:
+                errors.append(f"{path}.verdict: missing key '{k}'")
+
+
+def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:
+    path = "sb1"
+    for k in (
+        "code", "decoder", "frame_error_definition",
+        "eb_n0_grid_db", "waterfall", "verdict",
+    ):
+        if k not in block:
+            errors.append(f"{path}: missing key '{k}'")
+    if "eb_n0_grid_db" in block:
+        grid = block["eb_n0_grid_db"]
+        if list(grid) != list(BCH_GRID):
+            errors.append(
+                f"{path}.eb_n0_grid_db: does not match pinned BCH grid "
+                f"({list(BCH_GRID)})"
+            )
+    if "decoder" in block:
+        d = block["decoder"]
+        for k in ("name", "class", "algorithm"):
+            if k not in d:
+                errors.append(f"{path}.decoder: missing key '{k}'")
+        if "class" in d and d["class"] not in {"hard_ML", "soft_ML", "BDD", "other"}:
+            errors.append(
+                f"{path}.decoder.class: '{d['class']}' is not in "
+                f"{{hard_ML, soft_ML, BDD, other}}"
+            )
+    if "waterfall" in block:
+        for i, row in enumerate(block["waterfall"]):
+            _validate_waterfall_row(row, "sb1", errors, f"{path}.waterfall[{i}]")
+    if "verdict" in block and block["verdict"]:
+        v = block["verdict"]
+        if v.get("criterion") != EXPECTED_SB1_VERDICT_CRITERION:
+            errors.append(
+                f"{path}.verdict.criterion: expected "
+                f"'{EXPECTED_SB1_VERDICT_CRITERION}', got '{v.get('criterion')}'"
+            )
+        for k in ("at_eb_n0_db", "fer", "pass"):
+            if k not in v:
+                errors.append(f"{path}.verdict: missing key '{k}'")
+
+
+def validate_card(card: dict[str, Any]) -> list[str]:
+    """Returns a list of validation errors. Empty list means the card is valid."""
+    errors: list[str] = []
+
+    # Required top-level fields.
+    for k in (
+        "schema_version", "tier", "produced_by", "produced_at",
+        "reference_anchor", "operating_point", "channel", "methodology",
+    ):
+        if k not in card:
+            errors.append(f"missing top-level key '{k}'")
+
+    if "tier" in card and card["tier"] not in ("core", "extended", "full"):
+        errors.append(
+            f"tier: '{card['tier']}' not in {{core, extended, full}}"
+        )
+
+    if "operating_point" in card:
+        op = card["operating_point"]
+        if op.get("system_es_n0_db") != EXPECTED_OPERATING_ES_N0_DB:
+            errors.append(
+                f"operating_point.system_es_n0_db: expected "
+                f"{EXPECTED_OPERATING_ES_N0_DB}, got {op.get('system_es_n0_db')}"
+            )
+
+    if "channel" in card:
+        ch = card["channel"]
+        if ch.get("model") != "BPSK-AWGN":
+            errors.append(
+                f"channel.model: expected 'BPSK-AWGN', got '{ch.get('model')}'"
+            )
+        for k in ("sigma_formula", "llr_formula"):
+            if k not in ch:
+                errors.append(f"channel: missing key '{k}'")
+
+    if "methodology" in card:
+        m = card["methodology"]
+        for k, expected in EXPECTED_METHODOLOGY.items():
+            if m.get(k) != expected:
+                errors.append(
+                    f"methodology.{k}: expected {expected!r}, got {m.get(k)!r}"
+                )
+
+    # At least one code block must be present.
+    has_ldpc = "ldpc" in card and card["ldpc"]
+    has_sb1 = "sb1" in card and card["sb1"]
+    if not (has_ldpc or has_sb1):
+        errors.append("card has neither 'ldpc' nor 'sb1' block — empty")
+
+    if has_ldpc:
+        ldpc = card["ldpc"]
+        for k in ("decoder", "algorithm", "max_iterations", "subframes"):
+            if k not in ldpc:
+                errors.append(f"ldpc: missing key '{k}'")
+        if "subframes" in ldpc:
+            subs = ldpc["subframes"]
+            for label, block in subs.items():
+                _validate_ldpc_subframe(block, label, errors)
+            if "SF2" not in subs and "SF3_SF4" not in subs:
+                errors.append(
+                    "ldpc.subframes: at least one of SF2 or SF3_SF4 expected"
+                )
+
+    if has_sb1:
+        _validate_sb1(card["sb1"], errors)
+
+    return errors
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    try:
+        card = json.loads(Path(args.card).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"{args.card}: cannot load JSON: {exc}", file=sys.stderr)
+        return 1
+    errors = validate_card(card)
+    if not errors:
+        print(f"OK — {args.card} conforms to the standard schema.")
+        return 0
+    print(f"{args.card}: {len(errors)} validation error(s):", file=sys.stderr)
+    for e in errors:
+        print(f"  - {e}", file=sys.stderr)
+    return 1
+
+
+# ─── `compare` subcommand ────────────────────────────────────────────────
+#
+# Statistical comparison between two algo cards on tier-core fields.
+# This is NOT diff (equality check) — perf cards from different teams are
+# expected to diverge; the question is "by how much, statistically?"
+
+def _ci_overlap(a_fer: float, a_ci: float, b_fer: float, b_ci: float) -> str:
+    """Return 'A<' (A strictly better), 'B<' (B strictly better), or '=' (tied within CI)."""
+    a_lo, a_hi = a_fer - a_ci, a_fer + a_ci
+    b_lo, b_hi = b_fer - b_ci, b_fer + b_ci
+    if a_hi < b_lo:
+        return "A<"
+    if b_hi < a_lo:
+        return "B<"
+    return "="
+
+
+def _compare_waterfall(
+    a: list[dict[str, Any]],
+    b: list[dict[str, Any]],
+    label: str,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Compare two waterfalls grid point by grid point."""
+    a_by_db = {round(p["eb_n0_db"], 3): p for p in a}
+    b_by_db = {round(p["eb_n0_db"], 3): p for p in b}
+    shared = sorted(a_by_db.keys() & b_by_db.keys())
+    if not shared:
+        return {"label": label, "shared_points": 0, "summary": "no shared grid points"}
+
+    a_better = 0
+    b_better = 0
+    tied = 0
+    rows: list[dict[str, Any]] = []
+    for db in shared:
+        ap = a_by_db[db]
+        bp = b_by_db[db]
+        verdict = _ci_overlap(ap["fer"], ap["ci_fer"], bp["fer"], bp["ci_fer"])
+        if verdict == "A<":
+            a_better += 1
+        elif verdict == "B<":
+            b_better += 1
+        else:
+            tied += 1
+        rows.append({
+            "eb_n0_db": db,
+            "a_fer": ap["fer"], "a_ci": ap["ci_fer"],
+            "b_fer": bp["fer"], "b_ci": bp["ci_fer"],
+            "verdict": verdict,
+        })
+
+    if verbose:
+        print(f"\n{label} waterfall (shared {len(shared)} of "
+              f"{len(a_by_db)}/{len(b_by_db)} grid points):")
+        print(f"  {'Eb/N0':>6}  {'A FER':>10}  {'± CI':>10}  "
+              f"{'B FER':>10}  {'± CI':>10}  verdict")
+        for r in rows:
+            v = r["verdict"]
+            mark = "A wins" if v == "A<" else "B wins" if v == "B<" else "tied"
+            print(
+                f"  {r['eb_n0_db']:>5.1f}  "
+                f"{r['a_fer']:>10.6f}  {r['a_ci']:>10.6f}  "
+                f"{r['b_fer']:>10.6f}  {r['b_ci']:>10.6f}  {mark}"
+            )
+
+    return {
+        "label": label,
+        "shared_points": len(shared),
+        "a_better": a_better,
+        "b_better": b_better,
+        "tied": tied,
+        "summary": (
+            f"A better at {a_better} points, B better at {b_better}, "
+            f"tied at {tied}"
+        ),
+        "rows": rows,
+    }
+
+
+def _compare_verdict(
+    av: dict[str, Any] | None, bv: dict[str, Any] | None, label: str
+) -> dict[str, Any]:
+    if not av and not bv:
+        return {"label": label, "summary": "no verdicts present"}
+    if not av:
+        return {"label": label, "summary": "A missing verdict"}
+    if not bv:
+        return {"label": label, "summary": "B missing verdict"}
+    a_pass = av.get("pass")
+    b_pass = bv.get("pass")
+    if a_pass == b_pass:
+        outcome = "both pass" if a_pass else "both fail"
+    elif a_pass:
+        outcome = "A passes, B fails"
+    else:
+        outcome = "B passes, A fails"
+    return {
+        "label": label,
+        "a_pass": a_pass,
+        "b_pass": b_pass,
+        "a_at_eb_n0_db": av.get("at_eb_n0_db"),
+        "b_at_eb_n0_db": bv.get("at_eb_n0_db"),
+        "summary": outcome,
+    }
+
+
+def compare_cards(
+    a: dict[str, Any], b: dict[str, Any], verbose: bool = False
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "a_identity": {
+            "produced_by": a.get("produced_by"),
+            "tier": a.get("tier"),
+            "ldpc_decoder": a.get("ldpc", {}).get("decoder"),
+            "sb1_decoder": a.get("sb1", {}).get("decoder", {}).get("name"),
+            "sb1_class": a.get("sb1", {}).get("decoder", {}).get("class"),
+        },
+        "b_identity": {
+            "produced_by": b.get("produced_by"),
+            "tier": b.get("tier"),
+            "ldpc_decoder": b.get("ldpc", {}).get("decoder"),
+            "sb1_decoder": b.get("sb1", {}).get("decoder", {}).get("name"),
+            "sb1_class": b.get("sb1", {}).get("decoder", {}).get("class"),
+        },
+        "anchor_match": (
+            a.get("reference_anchor") == b.get("reference_anchor")
+        ),
+        "waterfalls": [],
+        "verdicts": [],
+    }
+
+    # LDPC subframe comparison.
+    a_ldpc = a.get("ldpc", {}).get("subframes", {})
+    b_ldpc = b.get("ldpc", {}).get("subframes", {})
+    for sf in ("SF2", "SF3_SF4"):
+        if sf in a_ldpc and sf in b_ldpc:
+            wf = _compare_waterfall(
+                a_ldpc[sf].get("waterfall", []),
+                b_ldpc[sf].get("waterfall", []),
+                f"ldpc.{sf}",
+                verbose,
+            )
+            result["waterfalls"].append(wf)
+            result["verdicts"].append(_compare_verdict(
+                a_ldpc[sf].get("verdict"),
+                b_ldpc[sf].get("verdict"),
+                f"ldpc.{sf}",
+            ))
+
+    # SB1 comparison.
+    if "sb1" in a and "sb1" in b:
+        result["waterfalls"].append(_compare_waterfall(
+            a["sb1"].get("waterfall", []),
+            b["sb1"].get("waterfall", []),
+            "sb1",
+            verbose,
+        ))
+        result["verdicts"].append(_compare_verdict(
+            a["sb1"].get("verdict"),
+            b["sb1"].get("verdict"),
+            "sb1",
+        ))
+
+    return result
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    try:
+        a = json.loads(Path(args.card_a).read_text(encoding="utf-8"))
+        b = json.loads(Path(args.card_b).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"cannot load cards: {exc}", file=sys.stderr)
+        return 2
+
+    result = compare_cards(a, b, verbose=args.verbose)
+
+    if args.json:
+        sys.stdout.write(json.dumps(result, indent=2) + "\n")
+        return 0
+
+    # Human-readable summary.
+    print(f"A: {args.card_a}")
+    print(f"   produced_by:  {result['a_identity']['produced_by']}")
+    print(f"   ldpc decoder: {result['a_identity']['ldpc_decoder']}")
+    print(f"   sb1 decoder:  {result['a_identity']['sb1_decoder']} "
+          f"({result['a_identity']['sb1_class']})")
+    print()
+    print(f"B: {args.card_b}")
+    print(f"   produced_by:  {result['b_identity']['produced_by']}")
+    print(f"   ldpc decoder: {result['b_identity']['ldpc_decoder']}")
+    print(f"   sb1 decoder:  {result['b_identity']['sb1_decoder']} "
+          f"({result['b_identity']['sb1_class']})")
+    print()
+    if not result["anchor_match"]:
+        print("WARNING: cards reference different anchor — comparison may not be fair")
+        print(f"  A anchor: {a.get('reference_anchor')}")
+        print(f"  B anchor: {b.get('reference_anchor')}")
+        print()
+
+    print("Verdicts:")
+    for v in result["verdicts"]:
+        print(f"  {v['label']:>15}: {v['summary']}")
+    print()
+    print("Waterfall (per-point CI-overlap):")
+    for w in result["waterfalls"]:
+        print(f"  {w['label']:>15}: {w['summary']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="perf_card",
-        description="LSIS-AFS Decoder Performance Card harness (V2).",
+        description=(
+            "LSIS-AFS Decoder Performance Card harness — run / validate / compare."
+        ),
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -614,6 +1013,36 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--reference-anchor-commit", default=None)
 
     rp.set_defaults(func=cmd_run)
+
+    # ── validate ────────────────────────────────────────────────────────
+    vp = sub.add_parser(
+        "validate",
+        help="Check that an algo card conforms to the standard schema.",
+    )
+    vp.add_argument("card", help="Path to the algo card JSON.")
+    vp.set_defaults(func=cmd_validate)
+
+    # ── compare ─────────────────────────────────────────────────────────
+    cp = sub.add_parser(
+        "compare",
+        help=(
+            "Statistically compare two algo cards on tier-core fields. "
+            "Reports verdict outcomes and per-grid-point CI-overlap "
+            "ranking (A better / B better / tied)."
+        ),
+    )
+    cp.add_argument("card_a", help="First algo card JSON.")
+    cp.add_argument("card_b", help="Second algo card JSON.")
+    cp.add_argument(
+        "--verbose", action="store_true",
+        help="Print full per-grid-point waterfall table.",
+    )
+    cp.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON instead of human summary.",
+    )
+    cp.set_defaults(func=cmd_compare)
+
     return p
 
 
