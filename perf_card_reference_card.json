@@ -1,0 +1,444 @@
+{
+  "schema_version": "1.0.0",
+  "tier": "core",
+  "produced_by": "lsis-afs perf_card V2",
+  "produced_at": "2026-05-26T21:19:30Z",
+  "reference_anchor": {
+    "repo": "luar-space/lsis-afs-test-vectors",
+    "tag": "v0.6.0"
+  },
+  "elapsed_seconds": 106.7,
+  "operating_point": {
+    "system_es_n0_db": 0.0,
+    "notes": "LSIS spec SNR >= 0 dB. Each code's Eb/N0 derives via its rate."
+  },
+  "channel": {
+    "model": "BPSK-AWGN",
+    "sigma_formula": "1 / sqrt(2 * R * 10^(Eb_N0_db/10))",
+    "llr_formula": "2 * y / sigma^2",
+    "symbol_mapping": "bit 0 -> +1, bit 1 -> -1"
+  },
+  "methodology": {
+    "seeds": [
+      42,
+      137,
+      313
+    ],
+    "message_ensemble": "uniform_random",
+    "ci_method": "wilson_95"
+  },
+  "ldpc": {
+    "decoder": "lunalink ldpc_decode (sum-product, float64)",
+    "algorithm": "Layered Sum-Product BP (phi-transform)",
+    "max_iterations": 50,
+    "early_termination": "syndrome check every iteration",
+    "subframes": {
+      "SF2": {
+        "code": {
+          "k": 1200,
+          "n": 2400,
+          "rate": "1/2",
+          "spec_ref": "LSIS V1.0 §2.4.3.1.2"
+        },
+        "frames_per_seed": 200,
+        "eb_n0_grid_db": [
+          0.2,
+          0.4,
+          0.6,
+          0.8,
+          1.0,
+          1.1,
+          1.2,
+          1.3,
+          1.4,
+          1.6,
+          2.0,
+          3.0
+        ],
+        "waterfall": [
+          {
+            "eb_n0_db": 0.2,
+            "fer": 0.9683333333333334,
+            "ber": 0.4834763888888889,
+            "ci_fer": 0.014281423926693916,
+            "frames": 600,
+            "frame_errors": 581,
+            "bit_errors": 348103,
+            "total_bits": 720000,
+            "not_converged": 581
+          },
+          {
+            "eb_n0_db": 0.4,
+            "fer": 0.7883333333333333,
+            "ber": 0.3941486111111111,
+            "ci_fer": 0.032633446082594754,
+            "frames": 600,
+            "frame_errors": 473,
+            "bit_errors": 283787,
+            "total_bits": 720000,
+            "not_converged": 473
+          },
+          {
+            "eb_n0_db": 0.6,
+            "fer": 0.49333333333333335,
+            "ber": 0.2474486111111111,
+            "ci_fer": 0.03987734166558022,
+            "frames": 600,
+            "frame_errors": 296,
+            "bit_errors": 178163,
+            "total_bits": 720000,
+            "not_converged": 296
+          },
+          {
+            "eb_n0_db": 0.8,
+            "fer": 0.23166666666666666,
+            "ber": 0.11509583333333333,
+            "ci_fer": 0.0336945205471336,
+            "frames": 600,
+            "frame_errors": 139,
+            "bit_errors": 82869,
+            "total_bits": 720000,
+            "not_converged": 138
+          },
+          {
+            "eb_n0_db": 1.0,
+            "fer": 0.06833333333333333,
+            "ber": 0.03389444444444444,
+            "ci_fer": 0.02031175080458844,
+            "frames": 600,
+            "frame_errors": 41,
+            "bit_errors": 24404,
+            "total_bits": 720000,
+            "not_converged": 41
+          },
+          {
+            "eb_n0_db": 1.1,
+            "fer": 0.041666666666666664,
+            "ber": 0.020752777777777776,
+            "ci_fer": 0.01620302206386608,
+            "frames": 600,
+            "frame_errors": 25,
+            "bit_errors": 14942,
+            "total_bits": 720000,
+            "not_converged": 25
+          },
+          {
+            "eb_n0_db": 1.2,
+            "fer": 0.008333333333333333,
+            "ber": 0.004168055555555556,
+            "ci_fer": 0.007896732539797391,
+            "frames": 600,
+            "frame_errors": 5,
+            "bit_errors": 3001,
+            "total_bits": 720000,
+            "not_converged": 5
+          },
+          {
+            "eb_n0_db": 1.3,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 720000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 1.4,
+            "fer": 0.0016666666666666668,
+            "ber": 0.0007861111111111111,
+            "ci_fer": 0.0045427694780105525,
+            "frames": 600,
+            "frame_errors": 1,
+            "bit_errors": 566,
+            "total_bits": 720000,
+            "not_converged": 1
+          },
+          {
+            "eb_n0_db": 1.6,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 720000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 720000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 3.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 720000,
+            "not_converged": 0
+          }
+        ],
+        "verdict": {
+          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
+          "at_eb_n0_db": 1.3,
+          "ber": 0.0,
+          "pass": true
+        }
+      },
+      "SF3_SF4": {
+        "code": {
+          "k": 870,
+          "n": 1740,
+          "rate": "1/2",
+          "spec_ref": "LSIS V1.0 §2.4.3.1.2",
+          "applies_to": [
+            "SF3",
+            "SF4"
+          ]
+        },
+        "frames_per_seed": 200,
+        "eb_n0_grid_db": [
+          0.2,
+          0.4,
+          0.6,
+          0.8,
+          1.0,
+          1.1,
+          1.2,
+          1.3,
+          1.4,
+          1.6,
+          2.0,
+          3.0
+        ],
+        "waterfall": [
+          {
+            "eb_n0_db": 0.2,
+            "fer": 0.9316666666666666,
+            "ber": 0.46586781609195405,
+            "ci_fer": 0.02031175080458844,
+            "frames": 600,
+            "frame_errors": 559,
+            "bit_errors": 243183,
+            "total_bits": 522000,
+            "not_converged": 559
+          },
+          {
+            "eb_n0_db": 0.4,
+            "fer": 0.7933333333333333,
+            "ber": 0.39704214559386974,
+            "ci_fer": 0.032350531570828234,
+            "frames": 600,
+            "frame_errors": 476,
+            "bit_errors": 207256,
+            "total_bits": 522000,
+            "not_converged": 476
+          },
+          {
+            "eb_n0_db": 0.6,
+            "fer": 0.5516666666666666,
+            "ber": 0.2763697318007663,
+            "ci_fer": 0.03966873514608839,
+            "frames": 600,
+            "frame_errors": 331,
+            "bit_errors": 144265,
+            "total_bits": 522000,
+            "not_converged": 331
+          },
+          {
+            "eb_n0_db": 0.8,
+            "fer": 0.23833333333333334,
+            "ber": 0.11831992337164751,
+            "ci_fer": 0.03402435211976137,
+            "frames": 600,
+            "frame_errors": 143,
+            "bit_errors": 61763,
+            "total_bits": 522000,
+            "not_converged": 143
+          },
+          {
+            "eb_n0_db": 1.0,
+            "fer": 0.09333333333333334,
+            "ber": 0.04684099616858237,
+            "ci_fer": 0.023346401615676762,
+            "frames": 600,
+            "frame_errors": 56,
+            "bit_errors": 24451,
+            "total_bits": 522000,
+            "not_converged": 56
+          },
+          {
+            "eb_n0_db": 1.1,
+            "fer": 0.058333333333333334,
+            "ber": 0.029055555555555557,
+            "ci_fer": 0.018903962838256978,
+            "frames": 600,
+            "frame_errors": 35,
+            "bit_errors": 15167,
+            "total_bits": 522000,
+            "not_converged": 35
+          },
+          {
+            "eb_n0_db": 1.2,
+            "fer": 0.03833333333333333,
+            "ber": 0.01918007662835249,
+            "ci_fer": 0.015593335627622499,
+            "frames": 600,
+            "frame_errors": 23,
+            "bit_errors": 10012,
+            "total_bits": 522000,
+            "not_converged": 23
+          },
+          {
+            "eb_n0_db": 1.3,
+            "fer": 0.013333333333333334,
+            "ber": 0.006636015325670498,
+            "ci_fer": 0.009658201474830942,
+            "frames": 600,
+            "frame_errors": 8,
+            "bit_errors": 3464,
+            "total_bits": 522000,
+            "not_converged": 8
+          },
+          {
+            "eb_n0_db": 1.4,
+            "fer": 0.01,
+            "ber": 0.005065134099616858,
+            "ci_fer": 0.00852648780743133,
+            "frames": 600,
+            "frame_errors": 6,
+            "bit_errors": 2644,
+            "total_bits": 522000,
+            "not_converged": 6
+          },
+          {
+            "eb_n0_db": 1.6,
+            "fer": 0.0016666666666666668,
+            "ber": 0.0008467432950191571,
+            "ci_fer": 0.0045427694780105525,
+            "frames": 600,
+            "frame_errors": 1,
+            "bit_errors": 442,
+            "total_bits": 522000,
+            "not_converged": 1
+          },
+          {
+            "eb_n0_db": 2.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 522000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 3.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0031809666641052885,
+            "frames": 600,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 522000,
+            "not_converged": 0
+          }
+        ],
+        "verdict": {
+          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
+          "at_eb_n0_db": 2.0,
+          "ber": 0.0,
+          "pass": true
+        }
+      }
+    }
+  },
+  "sb1": {
+    "code": {
+      "k": 9,
+      "n": 52,
+      "rate": "9/52",
+      "codebook_size": 400,
+      "structure": "4 FIDs * 100 TOIs",
+      "spec_ref": "LSIS V1.0 Tables 13/14 + §2.4.3.1.1"
+    },
+    "decoder": {
+      "name": "lunalink bch_decode_soft",
+      "class": "soft_ML",
+      "algorithm": "exhaustive ML over inner-product LLR"
+    },
+    "frame_error_definition": "decoded FID != transmitted OR decoded TOI != transmitted",
+    "frames_per_seed_default": 200,
+    "eb_n0_grid_db": [
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0,
+      7.6
+    ],
+    "waterfall": [
+      {
+        "eb_n0_db": 2.0,
+        "fer": 0.018333333333333333,
+        "ci_fer": 0.011130465115848993,
+        "frame_errors": 11,
+        "frames": 600
+      },
+      {
+        "eb_n0_db": 3.0,
+        "fer": 0.006666666666666667,
+        "ci_fer": 0.007209761165427865,
+        "frame_errors": 4,
+        "frames": 600
+      },
+      {
+        "eb_n0_db": 4.0,
+        "fer": 0.0,
+        "ci_fer": 0.0031809666641052885,
+        "frame_errors": 0,
+        "frames": 600
+      },
+      {
+        "eb_n0_db": 5.0,
+        "fer": 0.0,
+        "ci_fer": 0.0031809666641052885,
+        "frame_errors": 0,
+        "frames": 600
+      },
+      {
+        "eb_n0_db": 6.0,
+        "fer": 0.0,
+        "ci_fer": 0.0031809666641052885,
+        "frame_errors": 0,
+        "frames": 600
+      },
+      {
+        "eb_n0_db": 7.6,
+        "fer": 0.0,
+        "ci_fer": 0.0010648385091019076,
+        "frame_errors": 0,
+        "frames": 1800
+      }
+    ],
+    "verdict": {
+      "criterion": "FER < 0.01 at Es/N0 >= 0 dB",
+      "at_eb_n0_db": 7.6,
+      "fer": 0.0,
+      "ci_fer": 0.0010648385091019076,
+      "pass": true
+    }
+  }
+}

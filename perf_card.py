@@ -476,23 +476,27 @@ def build_algo_card(
 
 # ─── CLI ─────────────────────────────────────────────────────────────────
 
-def cmd_run(args: argparse.Namespace) -> int:
-    requested = [c.strip() for c in args.codes.split(",") if c.strip()]
-    bad = [c for c in requested if c not in CODE_BY_NAME]
-    if bad:
-        print(f"unknown code(s): {bad}", file=sys.stderr)
-        return 2
-    code_ids = [CODE_BY_NAME[c] for c in requested]
+def run_harness(
+    *,
+    decoder_cmd: list[str],
+    code_ids: list[int],
+    frames_per_seed: int,
+    max_iters: int,
+    decoder_meta: dict[str, str],
+    sb1_decoder_meta: dict[str, str],
+    reference_anchor: dict[str, str],
+) -> dict[str, Any]:
+    """Spawn the adapter, run the full sweep, return the algo card dict.
 
-    decoder_cmd = shlex.split(args.decoder)
+    Shared core between `run` and `self-test`.
+    """
+    print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
     print(
-        f"[harness] codes={requested}  "
-        f"frames_per_seed={args.frames_per_seed}  seeds={SEEDS}  "
-        f"max_iters={args.max_iters}",
+        f"[harness] codes={[CODES[c]['name'] for c in code_ids]}  "
+        f"frames_per_seed={frames_per_seed}  seeds={SEEDS}  "
+        f"max_iters={max_iters}",
         file=sys.stderr,
     )
-    print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
-
     proc = subprocess.Popen(
         decoder_cmd,
         stdin=subprocess.PIPE,
@@ -504,9 +508,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         for cid in code_ids:
             print(f"[harness] sweeping {CODES[cid]['name']}…", file=sys.stderr)
-            sweep[cid] = sweep_code(
-                proc, cid, args.frames_per_seed, args.max_iters
-            )
+            sweep[cid] = sweep_code(proc, cid, frames_per_seed, max_iters)
     finally:
         assert proc.stdin is not None
         proc.stdin.close()
@@ -519,6 +521,25 @@ def cmd_run(args: argparse.Namespace) -> int:
             print("[harness] adapter wait timeout — killed", file=sys.stderr)
     elapsed_s = time.time() - t0
 
+    return build_algo_card(
+        sweep=sweep,
+        frames_per_seed=frames_per_seed,
+        max_iters=max_iters,
+        decoder_meta=decoder_meta,
+        sb1_decoder_meta=sb1_decoder_meta,
+        reference_anchor=reference_anchor,
+        elapsed_s=elapsed_s,
+    )
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    requested = [c.strip() for c in args.codes.split(",") if c.strip()]
+    bad = [c for c in requested if c not in CODE_BY_NAME]
+    if bad:
+        print(f"unknown code(s): {bad}", file=sys.stderr)
+        return 2
+    code_ids = [CODE_BY_NAME[c] for c in requested]
+
     decoder_meta = {
         "name": args.decoder_name,
         "algorithm": args.decoder_algorithm,
@@ -529,22 +550,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         "class": args.sb1_decoder_class,
         "algorithm": args.sb1_decoder_algorithm or args.decoder_algorithm,
     }
-    reference_anchor: dict[str, str] = {
-        "repo": args.reference_anchor_repo,
-    }
+    reference_anchor: dict[str, str] = {"repo": args.reference_anchor_repo}
     if args.reference_anchor_tag:
         reference_anchor["tag"] = args.reference_anchor_tag
     if args.reference_anchor_commit:
         reference_anchor["commit"] = args.reference_anchor_commit
 
-    card = build_algo_card(
-        sweep=sweep,
+    card = run_harness(
+        decoder_cmd=shlex.split(args.decoder),
+        code_ids=code_ids,
         frames_per_seed=args.frames_per_seed,
         max_iters=args.max_iters,
         decoder_meta=decoder_meta,
         sb1_decoder_meta=sb1_decoder_meta,
         reference_anchor=reference_anchor,
-        elapsed_s=elapsed_s,
     )
     out_text = json.dumps(card, indent=2, ensure_ascii=False) + "\n"
     if args.out:
@@ -952,6 +971,130 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── `self-test` subcommand ──────────────────────────────────────────────
+#
+# Runs the bundled lunalink reference adapter at a small frame count and
+# CI-overlap-compares against the shipped reference card. Used as a
+# regression test for the harness mechanics (protocol, encoder bindings,
+# decoder bindings, statistical aggregation) and as a smoke test for
+# anyone setting up the harness for the first time.
+#
+# Layout assumption: the bundled adapter and the shipped reference card
+# live next to perf_card.py in the same directory.
+
+BUNDLED_ADAPTER_BASENAME = "perf_card_lunalink_adapter.py"
+SHIPPED_REFERENCE_BASENAME = "perf_card_reference_card.json"
+SELF_TEST_FRAMES_PER_SEED = 50
+
+
+def cmd_self_test(args: argparse.Namespace) -> int:
+    here = Path(__file__).resolve().parent
+    adapter = here / BUNDLED_ADAPTER_BASENAME
+    reference = here / SHIPPED_REFERENCE_BASENAME
+
+    if not adapter.exists():
+        print(f"bundled adapter not found: {adapter}", file=sys.stderr)
+        return 2
+    if not reference.exists():
+        print(f"shipped reference card not found: {reference}", file=sys.stderr)
+        print(
+            "(Generate by running the lunalink adapter at production frame counts "
+            "with --out perf_card_reference_card.json — see README.)",
+            file=sys.stderr,
+        )
+        return 2
+
+    ref_card = json.loads(reference.read_text(encoding="utf-8"))
+
+    # Mirror the reference card's adapter identity so the fresh card
+    # carries the same metadata (matters for `compare`'s identity block).
+    ldpc_meta = ref_card.get("ldpc", {})
+    sb1_meta = ref_card.get("sb1", {}).get("decoder", {})
+    decoder_meta = {
+        "name": ldpc_meta.get("decoder", "adapter"),
+        "algorithm": ldpc_meta.get("algorithm", "unspecified"),
+        "early_termination": ldpc_meta.get("early_termination", "unspecified"),
+    }
+    sb1_decoder_meta = {
+        "name": sb1_meta.get("name", decoder_meta["name"]),
+        "class": sb1_meta.get("class", "other"),
+        "algorithm": sb1_meta.get("algorithm", decoder_meta["algorithm"]),
+    }
+    reference_anchor = ref_card.get("reference_anchor", {})
+
+    print(
+        f"[self-test] reference: {reference}",
+        file=sys.stderr,
+    )
+    print(
+        f"[self-test] running bundled adapter at "
+        f"frames_per_seed={args.frames_per_seed} "
+        f"(reference card frames_per_seed may differ — comparison is CI-overlap)…",
+        file=sys.stderr,
+    )
+
+    code_ids = [CODE_BY_NAME[c.strip()] for c in args.codes.split(",")]
+    fresh = run_harness(
+        decoder_cmd=[sys.executable, str(adapter)],
+        code_ids=code_ids,
+        frames_per_seed=args.frames_per_seed,
+        max_iters=DEFAULT_MAX_ITERS,
+        decoder_meta=decoder_meta,
+        sb1_decoder_meta=sb1_decoder_meta,
+        reference_anchor=reference_anchor,
+    )
+
+    # Validate the freshly-produced card first.
+    errors = validate_card(fresh)
+    if errors:
+        print(
+            f"[self-test] FRESH CARD INVALID — {len(errors)} schema error(s):",
+            file=sys.stderr,
+        )
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    # Compare fresh vs shipped reference.
+    result = compare_cards(fresh, ref_card, verbose=args.verbose)
+
+    drift_points = sum(
+        w.get("a_better", 0) + w.get("b_better", 0)
+        for w in result["waterfalls"]
+    )
+    verdict_mismatch = any(
+        v.get("a_pass") is not None
+        and v.get("b_pass") is not None
+        and v["a_pass"] != v["b_pass"]
+        for v in result["verdicts"]
+    )
+
+    print()
+    print("=== self-test result ===")
+    print("Verdicts:")
+    for v in result["verdicts"]:
+        print(f"  {v['label']:>15}: {v['summary']}")
+    print("Waterfall (per-point CI-overlap):")
+    for w in result["waterfalls"]:
+        print(f"  {w['label']:>15}: {w['summary']}")
+
+    if drift_points == 0 and not verdict_mismatch:
+        print()
+        print("PASS — fresh card statistically equivalent to shipped reference.")
+        return 0
+    print()
+    print(
+        f"FAIL — {drift_points} grid point(s) outside CI overlap"
+        + (" + verdict mismatch" if verdict_mismatch else "")
+        + ". The fresh card and shipped reference disagree beyond statistical noise."
+    )
+    print(
+        "(If this is expected — e.g., lunalink decoder was deliberately changed — "
+        "regenerate the reference card.)"
+    )
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="perf_card",
@@ -1042,6 +1185,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON instead of human summary.",
     )
     cp.set_defaults(func=cmd_compare)
+
+    # ── self-test ───────────────────────────────────────────────────────
+    stp = sub.add_parser(
+        "self-test",
+        help=(
+            "Run the bundled lunalink adapter against the shipped reference "
+            "card; PASS iff fresh and reference are CI-overlap-tied at every "
+            "grid point and verdicts agree."
+        ),
+    )
+    stp.add_argument(
+        "--codes", default="SB1,SF2,SF3",
+        help="Codes to run during self-test (default: all).",
+    )
+    stp.add_argument(
+        "--frames-per-seed", type=int, default=SELF_TEST_FRAMES_PER_SEED,
+        help=f"Frames per seed (default: {SELF_TEST_FRAMES_PER_SEED} — faster than `run`'s default).",
+    )
+    stp.add_argument(
+        "--verbose", action="store_true",
+        help="Print the per-grid-point CI-overlap table.",
+    )
+    stp.set_defaults(func=cmd_self_test)
 
     return p
 
