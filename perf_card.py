@@ -258,6 +258,14 @@ class GridPoint:
         return wilson_ci_hw(self.frame_errors, self.frames)
 
 
+# Extended-tier convergence_cdf probe parameters (matches lunalink's
+# ldpc_characterise.cpp Step 5). Sweeps max_iters at the cliff Eb/N0 to
+# expose how many iterations the decoder actually needs to clear the floor.
+CONVERGENCE_PROBE_EB_N0_DB = 1.5      # cliff vicinity for R=1/2 LDPC
+CONVERGENCE_PROBE_ITERS = (1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50)
+CONVERGENCE_PROBE_FRAMES_PER_SEED = 2000
+
+
 def sweep_code(
     proc: subprocess.Popen[bytes],
     code_id: int,
@@ -300,6 +308,71 @@ def sweep_code(
         )
         points.append(pt)
     return points
+
+
+# ─── Extended-tier: convergence CDF probe ────────────────────────────────
+
+@dataclass
+class ConvergencePoint:
+    max_iters: int
+    frames: int = 0
+    frame_errors: int = 0
+    not_converged: int = 0
+
+    @property
+    def fer(self) -> float:
+        return self.frame_errors / self.frames if self.frames else 0.0
+
+    @property
+    def ci_fer(self) -> float:
+        return wilson_ci_hw(self.frame_errors, self.frames)
+
+
+def probe_convergence_cdf(
+    proc: subprocess.Popen[bytes],
+    code_id: int,
+    frames_per_seed: int = CONVERGENCE_PROBE_FRAMES_PER_SEED,
+    iters_list: tuple[int, ...] = CONVERGENCE_PROBE_ITERS,
+    eb_n0_db: float = CONVERGENCE_PROBE_EB_N0_DB,
+) -> list[ConvergencePoint]:
+    """For LDPC: sweep max_iters at one Eb/N0 point, return per-iter FER.
+
+    Exposes the convergence curve (how many BP iterations the decoder
+    actually needs to drop FER to its floor). At max_iters values below
+    convergence, almost every frame returns status=not_converged.
+    """
+    meta = CODES[code_id]
+    sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
+    sigma_sq = sigma * sigma
+
+    print(
+        f"[harness] convergence-cdf probe ({meta['name']} @ {eb_n0_db} dB)…",
+        file=sys.stderr,
+    )
+    results: list[ConvergencePoint] = []
+    for max_iters in iters_list:
+        pt = ConvergencePoint(max_iters=max_iters)
+        for seed in SEEDS:
+            ss = np.random.SeedSequence(
+                entropy=seed,
+                spawn_key=(code_id, int(eb_n0_db * 1000), max_iters, 0xC0FE),
+            )
+            rng = np.random.default_rng(ss)
+            for _ in range(frames_per_seed):
+                r = one_frame(proc, rng, code_id, sigma, sigma_sq, max_iters)
+                pt.frames += 1
+                if r.frame_error:
+                    pt.frame_errors += 1
+                if r.status == 1:
+                    pt.not_converged += 1
+        print(
+            f"  [{meta['name']}] max_iters={max_iters:>3}  "
+            f"FER={pt.fer:.6f} ± {pt.ci_fer:.6f}  "
+            f"not_converged={pt.not_converged}/{pt.frames}",
+            file=sys.stderr,
+        )
+        results.append(pt)
+    return results
 
 
 # ─── Verdict computation per code ────────────────────────────────────────
@@ -402,10 +475,12 @@ def build_algo_card(
     sb1_decoder_meta: dict[str, str],
     reference_anchor: dict[str, str],
     elapsed_s: float,
+    tier: str = "core",
+    convergence_cdf: list[ConvergencePoint] | None = None,
 ) -> dict[str, Any]:
     card: dict[str, Any] = {
         "schema_version": "1.0.0",
-        "tier": "core",
+        "tier": tier,
         "produced_by": "lsis-afs perf_card V2",
         "produced_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reference_anchor": reference_anchor,
@@ -471,6 +546,21 @@ def build_algo_card(
             "waterfall": [waterfall_entry_sb1(p) for p in sb1_points],
             "verdict": sb1_verdict(sb1_points),
         }
+
+    # ── Extended-tier blocks (present iff tier == "extended" or "full") ──
+    if tier in ("extended", "full") and convergence_cdf:
+        card["ldpc_extended"] = {
+            "convergence_cdf": [
+                {
+                    "max_iters": p.max_iters,
+                    "fer": p.fer,
+                    "ci_fer": p.ci_fer,
+                    "not_converged": p.not_converged,
+                    "frames": p.frames,
+                }
+                for p in convergence_cdf
+            ],
+        }
     return card
 
 
@@ -485,14 +575,16 @@ def run_harness(
     decoder_meta: dict[str, str],
     sb1_decoder_meta: dict[str, str],
     reference_anchor: dict[str, str],
+    tier: str = "core",
 ) -> dict[str, Any]:
-    """Spawn the adapter, run the full sweep, return the algo card dict.
+    """Spawn the adapter, run the full sweep (+ tier-extended/full probes
+    where applicable), return the algo card dict.
 
     Shared core between `run` and `self-test`.
     """
     print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
     print(
-        f"[harness] codes={[CODES[c]['name'] for c in code_ids]}  "
+        f"[harness] tier={tier}  codes={[CODES[c]['name'] for c in code_ids]}  "
         f"frames_per_seed={frames_per_seed}  seeds={SEEDS}  "
         f"max_iters={max_iters}",
         file=sys.stderr,
@@ -504,11 +596,16 @@ def run_harness(
     )
 
     sweep: dict[int, list[GridPoint]] = {}
+    convergence_cdf: list[ConvergencePoint] | None = None
     t0 = time.time()
     try:
         for cid in code_ids:
             print(f"[harness] sweeping {CODES[cid]['name']}…", file=sys.stderr)
             sweep[cid] = sweep_code(proc, cid, frames_per_seed, max_iters)
+        # Extended-tier probes — LDPC only, run on SF2 (the natural choice
+        # for max_iters characterisation; same algorithm applies to SF3/SF4).
+        if tier in ("extended", "full") and 1 in code_ids:
+            convergence_cdf = probe_convergence_cdf(proc, code_id=1)
     finally:
         assert proc.stdin is not None
         proc.stdin.close()
@@ -529,6 +626,8 @@ def run_harness(
         sb1_decoder_meta=sb1_decoder_meta,
         reference_anchor=reference_anchor,
         elapsed_s=elapsed_s,
+        tier=tier,
+        convergence_cdf=convergence_cdf,
     )
 
 
@@ -564,6 +663,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         decoder_meta=decoder_meta,
         sb1_decoder_meta=sb1_decoder_meta,
         reference_anchor=reference_anchor,
+        tier=args.tier,
     )
     out_text = json.dumps(card, indent=2, ensure_ascii=False) + "\n"
     if args.out:
@@ -1123,6 +1223,13 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument(
         "--max-iters", type=int, default=DEFAULT_MAX_ITERS,
         help="max_iters passed to the adapter (default: 50).",
+    )
+    rp.add_argument(
+        "--tier", default="core", choices=["core", "extended", "full"],
+        help=(
+            "Tier of probes to run (default: core). 'extended' adds an "
+            "LDPC convergence-CDF probe (max_iters sweep) on SF2 at 1.5 dB."
+        ),
     )
     rp.add_argument("--out", help="Path to write algo card JSON (default: stdout).")
 
