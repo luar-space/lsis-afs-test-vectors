@@ -347,6 +347,15 @@ CONVERGENCE_PROBE_EB_N0_DB = 1.5      # cliff vicinity for R=1/2 LDPC
 CONVERGENCE_PROBE_ITERS = (1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50)
 CONVERGENCE_PROBE_FRAMES_PER_SEED = 2000
 
+# Full-tier probes — match lunalink ldpc_characterise.cpp.
+ERROR_FLOOR_PROBE_EB_N0_DB = (2.5, 3.0)
+ERROR_FLOOR_PROBE_FRAMES_PER_SEED = 20000     # 60k per point — for upper-CI tightness
+ERROR_PATTERN_PROBE_EB_N0_DB = (1.0, 1.2, 1.4)
+ERROR_PATTERN_PROBE_FRAMES = 5000             # single-seed run; per-frame bit-error counts
+ERROR_PATTERN_HISTOGRAM_BINS = ((1, 5), (6, 20), (21, 100), (101, 300), (301, None))
+SATURATION_STRESS_EB_N0_DB = (0.1, 10.0)
+SATURATION_STRESS_FRAMES_PER_SEED = 1000      # sanity check at the extremes
+
 
 def sweep_code(
     proc: subprocess.Popen[bytes],
@@ -457,6 +466,177 @@ def probe_convergence_cdf(
     return results
 
 
+# ─── Full-tier: error_floor probe (deep characterisation at high Eb/N0) ──
+
+def probe_error_floor(
+    proc: subprocess.Popen[bytes],
+    code_id: int,
+    eb_n0_list: tuple[float, ...] = ERROR_FLOOR_PROBE_EB_N0_DB,
+    frames_per_seed: int = ERROR_FLOOR_PROBE_FRAMES_PER_SEED,
+) -> dict[str, dict[str, Any]]:
+    """At each of a few high Eb/N0 points, run many frames so the CI upper
+    bound is small even when zero errors are observed — characterises
+    where the curve flattens out (decoder's error floor)."""
+    meta = CODES[code_id]
+    print(
+        f"[harness] error-floor probe ({meta['name']} @ {eb_n0_list} dB, "
+        f"{frames_per_seed} frames/seed)…",
+        file=sys.stderr,
+    )
+    results: dict[str, dict[str, Any]] = {}
+    for eb_n0_db in eb_n0_list:
+        sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
+        sigma_sq = sigma * sigma
+        pt = GridPoint(eb_n0_db=eb_n0_db)
+        for seed in SEEDS:
+            ss = np.random.SeedSequence(
+                entropy=seed,
+                spawn_key=(code_id, int(eb_n0_db * 1000), 0xF100),
+            )
+            rng = np.random.default_rng(ss)
+            for _ in range(frames_per_seed):
+                r = one_frame(proc, rng, code_id, sigma, sigma_sq, DEFAULT_MAX_ITERS)
+                pt.frames += 1
+                pt.bit_errors += r.bit_errors
+                pt.total_bits += meta["n_info_bits"]
+                if r.frame_error:
+                    pt.frame_errors += 1
+                if r.status == 1:
+                    pt.not_converged += 1
+        key = f"floor_{meta['name'].lower()}_{eb_n0_db}"
+        ci_upper = pt.fer + pt.ci_fer if pt.frame_errors else wilson_ci_hw(0, pt.frames)
+        results[key] = {
+            "fer": pt.fer,
+            "ber": pt.ber,
+            "ci_fer": pt.ci_fer,
+            "frames": pt.frames,
+            "frame_errors": pt.frame_errors,
+            "total_bits": pt.total_bits,
+            "ci_fer_upper": ci_upper,
+        }
+        print(
+            f"  [{meta['name']}] Eb/N0={eb_n0_db} dB  "
+            f"FER={pt.fer:.2e}  ({pt.frame_errors}/{pt.frames})  "
+            f"CI upper={ci_upper:.2e}",
+            file=sys.stderr,
+        )
+    return results
+
+
+# ─── Full-tier: error_patterns probe (per-frame bit-error histograms) ────
+
+def probe_error_patterns(
+    proc: subprocess.Popen[bytes],
+    code_id: int,
+    eb_n0_list: tuple[float, ...] = ERROR_PATTERN_PROBE_EB_N0_DB,
+    frames: int = ERROR_PATTERN_PROBE_FRAMES,
+) -> list[dict[str, Any]]:
+    """Single-seed, per-frame error-count histogram. Captures the
+    DISTRIBUTION of bit errors per frame (not just FER), revealing
+    whether errors cluster or spread."""
+    meta = CODES[code_id]
+    print(
+        f"[harness] error-pattern probe ({meta['name']} @ {eb_n0_list} dB, "
+        f"{frames} frames/point)…",
+        file=sys.stderr,
+    )
+    results: list[dict[str, Any]] = []
+    for eb_n0_db in eb_n0_list:
+        sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
+        sigma_sq = sigma * sigma
+        # Single seed by convention (matches lunalink).
+        ss = np.random.SeedSequence(
+            entropy=SEEDS[0],
+            spawn_key=(code_id, int(eb_n0_db * 1000), 0xE7E7),
+        )
+        rng = np.random.default_rng(ss)
+        per_frame_errs: list[int] = []
+        max_errs = 0
+        for _ in range(frames):
+            r = one_frame(proc, rng, code_id, sigma, sigma_sq, DEFAULT_MAX_ITERS)
+            if r.bit_errors > 0:
+                per_frame_errs.append(r.bit_errors)
+                if r.bit_errors > max_errs:
+                    max_errs = r.bit_errors
+        # Histogram with the same bins lunalink uses.
+        histogram = []
+        for lo, hi in ERROR_PATTERN_HISTOGRAM_BINS:
+            if hi is None:
+                count = sum(1 for e in per_frame_errs if e >= lo)
+                label = f"{lo}+"
+            else:
+                count = sum(1 for e in per_frame_errs if lo <= e <= hi)
+                label = f"{lo}-{hi}"
+            histogram.append({"range": label, "count": count})
+        results.append({
+            "eb_n0_db": eb_n0_db,
+            "total_frames": frames,
+            "frame_errors": len(per_frame_errs),
+            "max_bit_errors": max_errs,
+            "k_nominal": meta["n_info_bits"],
+            "histogram": histogram,
+            "raw_errors": per_frame_errs,
+        })
+        print(
+            f"  [{meta['name']}] Eb/N0={eb_n0_db} dB  "
+            f"frame_errors={len(per_frame_errs)}/{frames}  "
+            f"max_bit_errors={max_errs}",
+            file=sys.stderr,
+        )
+    return results
+
+
+# ─── Full-tier: saturation_stress probe (extreme-SNR sanity) ─────────────
+
+def probe_saturation_stress(
+    proc: subprocess.Popen[bytes],
+    code_id: int,
+    eb_n0_list: tuple[float, ...] = SATURATION_STRESS_EB_N0_DB,
+    frames_per_seed: int = SATURATION_STRESS_FRAMES_PER_SEED,
+) -> dict[str, dict[str, Any]]:
+    """Smoke-test at very low and very high SNR: the decoder shouldn't
+    crash on either extreme. Low: ~all-errors expected. High: ~no-errors."""
+    meta = CODES[code_id]
+    print(
+        f"[harness] saturation-stress probe ({meta['name']} @ {eb_n0_list} dB)…",
+        file=sys.stderr,
+    )
+    results: dict[str, dict[str, Any]] = {}
+    for eb_n0_db in eb_n0_list:
+        sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
+        sigma_sq = sigma * sigma
+        pt = GridPoint(eb_n0_db=eb_n0_db)
+        for seed in SEEDS:
+            ss = np.random.SeedSequence(
+                entropy=seed,
+                spawn_key=(code_id, int(eb_n0_db * 1000), 0x5A57),
+            )
+            rng = np.random.default_rng(ss)
+            for _ in range(frames_per_seed):
+                r = one_frame(proc, rng, code_id, sigma, sigma_sq, DEFAULT_MAX_ITERS)
+                pt.frames += 1
+                pt.bit_errors += r.bit_errors
+                pt.total_bits += meta["n_info_bits"]
+                if r.frame_error:
+                    pt.frame_errors += 1
+                if r.status == 1:
+                    pt.not_converged += 1
+        label = "low_snr" if eb_n0_db < 1.0 else "high_snr"
+        results[label] = {
+            "eb_n0_db": eb_n0_db,
+            "fer": pt.fer,
+            "ber": pt.ber,
+            "frames": pt.frames,
+            "not_converged": pt.not_converged,
+        }
+        print(
+            f"  [{meta['name']}] {label}  Eb/N0={eb_n0_db} dB  "
+            f"FER={pt.fer:.4f}  not_converged={pt.not_converged}",
+            file=sys.stderr,
+        )
+    return results
+
+
 # ─── Verdict computation per code ────────────────────────────────────────
 
 def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
@@ -559,6 +739,9 @@ def build_algo_card(
     elapsed_s: float,
     tier: str = "core",
     convergence_cdf: list[ConvergencePoint] | None = None,
+    error_floor: dict[str, dict[str, Any]] | None = None,
+    error_patterns: list[dict[str, Any]] | None = None,
+    saturation_stress: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     card: dict[str, Any] = {
         "schema_version": "1.0.0",
@@ -643,6 +826,18 @@ def build_algo_card(
                 for p in convergence_cdf
             ],
         }
+
+    # ── Full-tier blocks (present iff tier == "full") ────────────────────
+    if tier == "full":
+        full_block: dict[str, Any] = {}
+        if error_floor:
+            full_block["error_floor"] = error_floor
+        if error_patterns:
+            full_block["error_patterns"] = error_patterns
+        if saturation_stress:
+            full_block["saturation_stress"] = saturation_stress
+        if full_block:
+            card["ldpc_full"] = full_block
     return card
 
 
@@ -687,15 +882,27 @@ def run_harness(
 
     sweep: dict[int, list[GridPoint]] = {}
     convergence_cdf: list[ConvergencePoint] | None = None
+    error_floor: dict[str, dict[str, Any]] | None = None
+    error_patterns: list[dict[str, Any]] | None = None
+    saturation_stress: dict[str, dict[str, Any]] | None = None
     t0 = time.time()
     try:
         for cid in code_ids:
             print(f"[harness] sweeping {CODES[cid]['name']}…", file=sys.stderr)
             sweep[cid] = sweep_code(proc, cid, frames_per_seed, max_iters)
-        # Extended-tier probes — LDPC only, run on SF2 (the natural choice
-        # for max_iters characterisation; same algorithm applies to SF3/SF4).
+        # Extended-tier probes — LDPC only, run on SF2 (the natural choice;
+        # same algorithm applies to SF3/SF4 so a separate sweep would be
+        # redundant).
         if tier in ("extended", "full") and 1 in code_ids:
             convergence_cdf = probe_convergence_cdf(proc, code_id=1)
+        # Full-tier probes — also LDPC, also SF2.
+        if tier == "full" and 1 in code_ids:
+            error_floor = {}
+            error_floor.update(probe_error_floor(proc, code_id=1))
+            if 2 in code_ids:
+                error_floor.update(probe_error_floor(proc, code_id=2))
+            error_patterns = probe_error_patterns(proc, code_id=1)
+            saturation_stress = probe_saturation_stress(proc, code_id=1)
     finally:
         assert proc.stdin is not None
         proc.stdin.close()
@@ -718,6 +925,9 @@ def run_harness(
         elapsed_s=elapsed_s,
         tier=tier,
         convergence_cdf=convergence_cdf,
+        error_floor=error_floor,
+        error_patterns=error_patterns,
+        saturation_stress=saturation_stress,
     )
 
 
