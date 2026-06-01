@@ -34,8 +34,10 @@ V3+ deferred:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import math
+import os
 import shlex
 import struct
 import subprocess
@@ -430,40 +432,63 @@ SATURATION_STRESS_EB_N0_DB = (0.1, 10.0)
 SATURATION_STRESS_FRAMES_PER_SEED = 1000      # sanity check at the extremes
 
 
+def sweep_one_grid_point(
+    proc: subprocess.Popen[bytes],
+    code_id: int,
+    eb_n0_db: float,
+    frames_per_seed: int,
+    max_iters: int,
+) -> GridPoint:
+    """Run the Monte Carlo for one (code, Eb/N0) point against `proc`.
+
+    Independent of all other grid points — drives parallelism: each
+    worker can claim one of these and run to completion against its own
+    adapter subprocess. RNG seeding is purely a function of (seed,
+    code_id, eb_n0_db), so two workers running the same grid point
+    against the same decoder produce identical results.
+    """
+    meta = CODES[code_id]
+    sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
+    sigma_sq = sigma * sigma
+    pt = GridPoint(eb_n0_db=eb_n0_db)
+    # BCH bumps the operating point's frame count for tighter CI on the verdict.
+    if code_id == 0 and abs(eb_n0_db - BCH_OPERATING_EB_N0) < 1e-6:
+        this_frames = frames_per_seed * BCH_OPERATING_FRAMES_FACTOR
+    else:
+        this_frames = frames_per_seed
+    for seed in SEEDS:
+        ss = np.random.SeedSequence(
+            entropy=seed, spawn_key=(code_id, int(eb_n0_db * 1000))
+        )
+        rng = np.random.default_rng(ss)
+        for _ in range(this_frames):
+            r = one_frame(proc, rng, code_id, sigma, sigma_sq, max_iters)
+            pt.frames += 1
+            pt.bit_errors += r.bit_errors
+            pt.total_bits += meta["n_info_bits"]
+            if r.frame_error:
+                pt.frame_errors += 1
+            if r.status == 1:
+                pt.not_converged += 1
+            pt.iters_sum += r.iters_used
+    return pt
+
+
 def sweep_code(
     proc: subprocess.Popen[bytes],
     code_id: int,
     frames_per_seed: int,
     max_iters: int,
 ) -> list[GridPoint]:
+    """Serial sweep across all grid points of one code. Used by the
+    single-worker path. Multi-worker uses `sweep_one_grid_point` directly
+    via the worker pool below."""
     meta = CODES[code_id]
     points = []
     for eb_n0_db in meta["grid_db"]:
-        sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
-        sigma_sq = sigma * sigma
-        pt = GridPoint(eb_n0_db=eb_n0_db)
-        # BCH bumps the operating point's frame count for tighter CI on the verdict.
-        if code_id == 0 and abs(eb_n0_db - BCH_OPERATING_EB_N0) < 1e-6:
-            this_frames = frames_per_seed * BCH_OPERATING_FRAMES_FACTOR
-        else:
-            this_frames = frames_per_seed
-        for seed in SEEDS:
-            ss = np.random.SeedSequence(
-                entropy=seed, spawn_key=(code_id, int(eb_n0_db * 1000))
-            )
-            rng = np.random.default_rng(ss)
-            for _ in range(this_frames):
-                r = one_frame(
-                    proc, rng, code_id, sigma, sigma_sq, max_iters
-                )
-                pt.frames += 1
-                pt.bit_errors += r.bit_errors
-                pt.total_bits += meta["n_info_bits"]
-                if r.frame_error:
-                    pt.frame_errors += 1
-                if r.status == 1:
-                    pt.not_converged += 1
-                pt.iters_sum += r.iters_used
+        pt = sweep_one_grid_point(
+            proc, code_id, eb_n0_db, frames_per_seed, max_iters
+        )
         print(
             f"  [{meta['name']}] Eb/N0={eb_n0_db:>4.1f} dB  "
             f"FER={pt.fer:.6f} ± {pt.ci_fer:.6f}  "
@@ -472,6 +497,113 @@ def sweep_code(
         )
         points.append(pt)
     return points
+
+
+# ─── Multiprocessing: per-worker adapter + grid-point dispatcher ─────────
+#
+# Each worker process spawns its own adapter subprocess at init time and
+# keeps it alive for the worker's lifetime. The parent dispatches grid
+# points across the pool. Adapter handshake costs are paid N times (one
+# per worker) instead of 1 — trivial against the cost of a full sweep.
+
+_worker_proc: subprocess.Popen[bytes] | None = None
+
+
+def _worker_init(decoder_cmd: list[str]) -> None:
+    """Called once per worker process. Spawns the adapter and handshakes."""
+    global _worker_proc
+    _worker_proc = subprocess.Popen(
+        decoder_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    handshake_with_adapter(_worker_proc)
+
+
+def _worker_run_point(
+    task: tuple[int, float, int, int],
+) -> tuple[int, float, GridPoint]:
+    """Run one grid point against this worker's adapter."""
+    code_id, eb_n0_db, frames_per_seed, max_iters = task
+    assert _worker_proc is not None
+    pt = sweep_one_grid_point(
+        _worker_proc, code_id, eb_n0_db, frames_per_seed, max_iters
+    )
+    return code_id, eb_n0_db, pt
+
+
+def _worker_handshake_only(decoder_cmd: list[str]) -> dict[str, Any]:
+    """Used by the parent to do one handshake (just to capture adapter
+    identity for the algo card) without keeping the subprocess alive."""
+    proc = subprocess.Popen(
+        decoder_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    try:
+        info = handshake_with_adapter(proc)
+    finally:
+        assert proc.stdin is not None
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return info
+
+
+def parallel_sweep(
+    decoder_cmd: list[str],
+    code_ids: list[int],
+    frames_per_seed: int,
+    max_iters: int,
+    n_workers: int,
+) -> tuple[dict[int, list[GridPoint]], dict[str, Any]]:
+    """Distribute the full grid sweep across `n_workers` adapter
+    subprocesses. Returns (sweep_dict, adapter_info_from_handshake).
+    """
+    # One quick handshake to capture adapter identity for the card.
+    adapter_info = _worker_handshake_only(decoder_cmd)
+
+    # Build the task list (one entry per grid point).
+    tasks: list[tuple[int, float, int, int]] = []
+    for cid in code_ids:
+        for eb_n0_db in CODES[cid]["grid_db"]:
+            tasks.append((cid, eb_n0_db, frames_per_seed, max_iters))
+
+    sweep: dict[int, dict[float, GridPoint]] = {cid: {} for cid in code_ids}
+
+    n_threads = n_workers
+    if n_threads <= 0:
+        n_threads = max(1, (os.cpu_count() or 1) - 1)
+    print(
+        f"[harness] parallel sweep — {n_threads} worker(s), "
+        f"{len(tasks)} grid points",
+        file=sys.stderr,
+    )
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=n_threads,
+        initializer=_worker_init,
+        initargs=(decoder_cmd,),
+    ) as pool:
+        completed = 0
+        for cid_out, eb_n0_out, pt in pool.map(_worker_run_point, tasks):
+            sweep[cid_out][eb_n0_out] = pt
+            completed += 1
+            print(
+                f"  [{CODES[cid_out]['name']}] Eb/N0={eb_n0_out:>4.1f} dB  "
+                f"FER={pt.fer:.6f} ± {pt.ci_fer:.6f}  "
+                f"(frames={pt.frames}, frame_errors={pt.frame_errors}) "
+                f"[{completed}/{len(tasks)}]",
+                file=sys.stderr,
+            )
+
+    # Reassemble: per code, points sorted by Eb/N0 in the original order.
+    out: dict[int, list[GridPoint]] = {}
+    for cid in code_ids:
+        ordered = [sweep[cid][db] for db in CODES[cid]["grid_db"]]
+        out[cid] = ordered
+    return out, adapter_info
 
 
 # ─── Extended-tier: convergence CDF probe ────────────────────────────────
@@ -924,32 +1056,24 @@ def run_harness(
     max_iters: int,
     reference_anchor: dict[str, str],
     tier: str = "core",
+    n_workers: int = 1,
 ) -> dict[str, Any]:
-    """Spawn the adapter, run the handshake, run the full sweep (+ tier-
-    extended/full probes where applicable), return the algo card dict.
+    """Run the handshake + main sweep (+ tier-extended/full probes where
+    applicable) and return the algo card dict.
+
+    When n_workers > 1 the main grid sweep runs in parallel across N
+    adapter subprocesses (each worker spawns one). Tier-extended/full
+    probes always run serially against a final adapter — they're smaller
+    by an order of magnitude and the implementation complexity isn't
+    worth the savings.
 
     Shared core between `run` and `self-test`. Adapter identity (decoder
-    name / algorithm / class) is taken from the handshake response — no
-    longer passed via CLI flags.
+    name / algorithm / class) is taken from the handshake response.
     """
-    print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
     print(
         f"[harness] tier={tier}  codes={[CODES[c]['name'] for c in code_ids]}  "
         f"frames_per_seed={frames_per_seed}  seeds={SEEDS}  "
-        f"max_iters={max_iters}",
-        file=sys.stderr,
-    )
-    proc = subprocess.Popen(
-        decoder_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
-
-    # Handshake first — failures here surface as RuntimeError, harness aborts.
-    adapter_info = handshake_with_adapter(proc)
-    print(
-        f"[harness] handshake ok — adapter: {adapter_info.get('name', '?')} "
-        f"(supports: {adapter_info.get('supports_codes', '?')})",
+        f"max_iters={max_iters}  workers={n_workers}",
         file=sys.stderr,
     )
 
@@ -958,34 +1082,88 @@ def run_harness(
     error_floor: dict[str, dict[str, Any]] | None = None
     error_patterns: list[dict[str, Any]] | None = None
     saturation_stress: dict[str, dict[str, Any]] | None = None
+    adapter_info: dict[str, Any] = {}
     t0 = time.time()
-    try:
-        for cid in code_ids:
-            print(f"[harness] sweeping {CODES[cid]['name']}…", file=sys.stderr)
-            sweep[cid] = sweep_code(proc, cid, frames_per_seed, max_iters)
-        # Extended-tier probes — LDPC only, run on SF2 (the natural choice;
-        # same algorithm applies to SF3/SF4 so a separate sweep would be
-        # redundant).
+
+    if n_workers > 1:
+        # ── Parallel grid sweep ──
+        sweep, adapter_info = parallel_sweep(
+            decoder_cmd=decoder_cmd,
+            code_ids=code_ids,
+            frames_per_seed=frames_per_seed,
+            max_iters=max_iters,
+            n_workers=n_workers,
+        )
+        # Extended/full probes run serially against a fresh adapter.
         if tier in ("extended", "full") and 1 in code_ids:
-            convergence_cdf = probe_convergence_cdf(proc, code_id=1)
-        # Full-tier probes — also LDPC, also SF2.
-        if tier == "full" and 1 in code_ids:
-            error_floor = {}
-            error_floor.update(probe_error_floor(proc, code_id=1))
-            if 2 in code_ids:
-                error_floor.update(probe_error_floor(proc, code_id=2))
-            error_patterns = probe_error_patterns(proc, code_id=1)
-            saturation_stress = probe_saturation_stress(proc, code_id=1)
-    finally:
-        assert proc.stdin is not None
-        proc.stdin.close()
+            proc = subprocess.Popen(
+                decoder_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+            )
+            handshake_with_adapter(proc)
+            try:
+                convergence_cdf = probe_convergence_cdf(proc, code_id=1)
+                if tier == "full":
+                    error_floor = {}
+                    error_floor.update(probe_error_floor(proc, code_id=1))
+                    if 2 in code_ids:
+                        error_floor.update(probe_error_floor(proc, code_id=2))
+                    error_patterns = probe_error_patterns(proc, code_id=1)
+                    saturation_stress = probe_saturation_stress(proc, code_id=1)
+            finally:
+                assert proc.stdin is not None
+                proc.stdin.close()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+    else:
+        # ── Serial path (single adapter, every probe) ──
+        print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
+        proc = subprocess.Popen(
+            decoder_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+        adapter_info = handshake_with_adapter(proc)
+        print(
+            f"[harness] handshake ok — adapter: {adapter_info.get('name', '?')} "
+            f"(supports: {adapter_info.get('supports_codes', '?')})",
+            file=sys.stderr,
+        )
         try:
-            rc = proc.wait(timeout=10)
-            if rc != 0:
-                print(f"[harness] adapter exited with code {rc}", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            print("[harness] adapter wait timeout — killed", file=sys.stderr)
+            for cid in code_ids:
+                print(
+                    f"[harness] sweeping {CODES[cid]['name']}…",
+                    file=sys.stderr,
+                )
+                sweep[cid] = sweep_code(proc, cid, frames_per_seed, max_iters)
+            if tier in ("extended", "full") and 1 in code_ids:
+                convergence_cdf = probe_convergence_cdf(proc, code_id=1)
+            if tier == "full" and 1 in code_ids:
+                error_floor = {}
+                error_floor.update(probe_error_floor(proc, code_id=1))
+                if 2 in code_ids:
+                    error_floor.update(probe_error_floor(proc, code_id=2))
+                error_patterns = probe_error_patterns(proc, code_id=1)
+                saturation_stress = probe_saturation_stress(proc, code_id=1)
+        finally:
+            assert proc.stdin is not None
+            proc.stdin.close()
+            try:
+                rc = proc.wait(timeout=10)
+                if rc != 0:
+                    print(
+                        f"[harness] adapter exited with code {rc}",
+                        file=sys.stderr,
+                    )
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                print(
+                    "[harness] adapter wait timeout — killed",
+                    file=sys.stderr,
+                )
     elapsed_s = time.time() - t0
 
     return build_algo_card(
@@ -1025,6 +1203,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         max_iters=args.max_iters,
         reference_anchor=reference_anchor,
         tier=args.tier,
+        n_workers=args.workers,
     )
     out_text = json.dumps(card, indent=2, ensure_ascii=False) + "\n"
     if args.out:
@@ -1821,6 +2000,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Tier of probes to run (default: core). 'extended' adds an "
             "LDPC convergence-CDF probe (max_iters sweep) on SF2 at 1.5 dB."
+        ),
+    )
+    _default_workers = max(1, (os.cpu_count() or 1) - 1)
+    rp.add_argument(
+        "--workers", type=int, default=_default_workers,
+        help=(
+            f"Number of parallel adapter subprocesses to run the grid "
+            f"sweep across (default: {_default_workers} = cpu_count - 1). "
+            f"Pass 1 for the serial path."
         ),
     )
     rp.add_argument("--out", help="Path to write algo card JSON (default: stdout).")
