@@ -184,12 +184,20 @@ Then validate the resulting card against the standard schema:
 python perf_card.py validate my_algo_card.json
 ```
 
-And compare it against the bundled lunalink reference card to see how
-your decoder ranks:
+And compare it against the shipped reference card (which contains the
+lunalink reference decoder's measurements) to see how your decoder ranks:
 
 ```bash
 python perf_card.py compare my_algo_card.json \
                             ../perf_card_reference_card.json --verbose
+```
+
+For an N-way ranking across multiple submissions:
+
+```bash
+python perf_card.py leaderboard my_algo_card.json \
+                                ../perf_card_reference_card.json \
+                                other_team_card.json
 ```
 
 To isolate adapter mechanics from harness sweep cost, record a request
@@ -205,5 +213,8 @@ my_adapter < captured_requests.bin > my_responses.bin
 
 The protocol and algo-card schema are defined in
 `shaping/decoder-performance-card.md` (in this repo). The lunalink
-reference adapter at `../perf_card_lunalink_adapter.py` is a complete
-working example you can crib from.
+adapter (a complete working example) lives in the lunalink repository,
+not here — this repo is vendor-agnostic, treating lunalink as one
+adopter among many. If you have the lunalink source checkout, look for
+its perf-card adapter there; otherwise the templates above plus your
+own decoder calls are everything you need.

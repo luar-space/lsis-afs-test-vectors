@@ -48,13 +48,11 @@ from typing import Any
 
 import numpy as np
 
-# Hard dependency on lunalink Python bindings for encoding. Adopters who
-# run this harness need to install lunalink — see README for setup.
-from lunalink.afs import (  # type: ignore[import-not-found]
-    LdpcSubframe,
-    bch_encode,
-    ldpc_encode,
-)
+# NOTE: this harness does NOT import lunalink. Codewords come from a
+# shipped reference pool (`perf_card_reference_codewords.npz`) generated
+# once by the maintainer via `tools/generate_perf_card_reference_codewords.py`.
+# Lunalink is treated as just another decoder implementation — the same
+# adopter contract any team would use.
 
 
 # ─── Code metadata ───────────────────────────────────────────────────────
@@ -74,7 +72,6 @@ CODES = {
         "n_bits": 52,
         "n_info_bits": 9,
         "rate": 9.0 / 52.0,
-        "subframe": None,  # BCH — uses bch_encode, not ldpc_encode
         "grid_db": BCH_GRID,
         "spec_ref": "LSIS V1.0 Tables 13/14 + §2.4.3.1.1",
     },
@@ -83,7 +80,6 @@ CODES = {
         "n_bits": 2400,
         "n_info_bits": 1200,
         "rate": 0.5,
-        "subframe": LdpcSubframe.SF2,
         "grid_db": LDPC_GRID,
         "spec_ref": "LSIS V1.0 §2.4.3.1.2",
     },
@@ -92,7 +88,6 @@ CODES = {
         "n_bits": 1740,
         "n_info_bits": 870,
         "rate": 0.5,
-        "subframe": LdpcSubframe.SF3,
         "grid_db": LDPC_GRID,
         "spec_ref": "LSIS V1.0 §2.4.3.1.2",
     },
@@ -137,22 +132,100 @@ def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
     return info
 
 
-# ─── Encoding via lunalink bindings ──────────────────────────────────────
+# ─── Shipped reference codeword pool ─────────────────────────────────────
+#
+# The harness samples codewords from a shipped pool of (info, codeword)
+# pairs — bit-packed and compressed in perf_card_reference_codewords.npz.
+# The pool was generated once by the maintainer via lunalink's encoder
+# (see tools/generate_perf_card_reference_codewords.py); from then on
+# the harness needs no encoder dependency.
+#
+# The harness picks pool indices via the seeded RNG, so:
+#   - Two harnesses run with the same seed sequence see identical
+#     (info, codeword) pairs at identical positions in the frame stream.
+#   - Two adopters' algo cards are therefore methodologically aligned
+#     down to byte-identical channel realisations modulo the RNG (numpy
+#     `default_rng` for AWGN noise samples).
+#
+# Pool size: 100 BCH pairs + 1000 LDPC pairs per LDPC code.
+
+REFERENCE_CODEWORDS_BASENAME = "perf_card_reference_codewords.npz"
+
+
+@dataclass
+class CodewordPool:
+    sb1_info: np.ndarray         # (n_bch, 9)  uint8 {0,1}
+    sb1_codeword: np.ndarray     # (n_bch, 52)
+    sf2_info: np.ndarray         # (n_ldpc, 1200)
+    sf2_codeword: np.ndarray     # (n_ldpc, 2400)
+    sf3_info: np.ndarray         # (n_ldpc, 870)
+    sf3_codeword: np.ndarray     # (n_ldpc, 1740)
+
+    def pair(self, code_id: int, index: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return (info_bits, codeword) for `code_id` at `index` modulo pool size."""
+        if code_id == 0:
+            i = index % self.sb1_info.shape[0]
+            return self.sb1_info[i], self.sb1_codeword[i]
+        if code_id == 1:
+            i = index % self.sf2_info.shape[0]
+            return self.sf2_info[i], self.sf2_codeword[i]
+        if code_id == 2:
+            i = index % self.sf3_info.shape[0]
+            return self.sf3_info[i], self.sf3_codeword[i]
+        raise ValueError(f"unknown code_id: {code_id}")
+
+
+def load_codeword_pool() -> CodewordPool:
+    """Load the shipped reference codeword pool. Lazy-loaded once."""
+    here = Path(__file__).resolve().parent
+    path = here / REFERENCE_CODEWORDS_BASENAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Reference codeword pool not found at {path}. "
+            f"(Run tools/generate_perf_card_reference_codewords.py — "
+            f"maintainer task, requires lunalink — to regenerate.)"
+        )
+    with np.load(path) as z:
+        def unpack(name: str, n_bits: int) -> np.ndarray:
+            return np.unpackbits(z[name], axis=1)[:, :n_bits]
+        pool = CodewordPool(
+            sb1_info     = unpack("sb1_info_packed",      9),
+            sb1_codeword = unpack("sb1_codeword_packed", 52),
+            sf2_info     = unpack("sf2_info_packed",   1200),
+            sf2_codeword = unpack("sf2_codeword_packed", 2400),
+            sf3_info     = unpack("sf3_info_packed",    870),
+            sf3_codeword = unpack("sf3_codeword_packed", 1740),
+        )
+    return pool
+
+
+_pool_singleton: CodewordPool | None = None
+
+
+def get_pool() -> CodewordPool:
+    """Lazy-load the codeword pool once per process."""
+    global _pool_singleton
+    if _pool_singleton is None:
+        _pool_singleton = load_codeword_pool()
+    return _pool_singleton
+
 
 def generate_and_encode(
     code_id: int, rng: np.random.Generator
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return (info_bits, codeword) — uniform_random message, real codeword."""
-    meta = CODES[code_id]
-    if code_id == 0:  # SB1 / BCH — uniform over the 400 valid (FID, TOI) combos
-        fid_val = int(rng.integers(0, 4))
-        toi_val = int(rng.integers(0, 100))
-        info = pack_sb1_info(fid_val, toi_val)
-        codeword = np.asarray(bch_encode(fid_val, toi_val), dtype=np.uint8)
-    else:  # LDPC — uniform over the 2^k info-bit space
-        info = rng.integers(0, 2, meta["n_info_bits"], dtype=np.uint8)
-        codeword = np.asarray(ldpc_encode(meta["subframe"], info), dtype=np.uint8)
-    return info, codeword
+    """Return (info_bits, codeword) — sampled from the shipped pool via
+    a seeded random index, so two harnesses with the same seed see the
+    same pairs in the same positions."""
+    pool = get_pool()
+    # Sample a pool index. Modulo-cycle is fine — pool size is large enough
+    # that across a full sweep each codeword is reused only tens of times.
+    if code_id == 0:
+        idx = int(rng.integers(0, pool.sb1_info.shape[0]))
+    elif code_id == 1:
+        idx = int(rng.integers(0, pool.sf2_info.shape[0]))
+    else:
+        idx = int(rng.integers(0, pool.sf3_info.shape[0]))
+    return pool.pair(code_id, idx)
 
 
 # ─── Wilson 95% CI half-width ────────────────────────────────────────────
@@ -1361,33 +1434,29 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 # ─── `self-test` subcommand ──────────────────────────────────────────────
 #
-# Runs the bundled lunalink reference adapter at a small frame count and
-# CI-overlap-compares against the shipped reference card. Used as a
-# regression test for the harness mechanics (protocol, encoder bindings,
-# decoder bindings, statistical aggregation) and as a smoke test for
-# anyone setting up the harness for the first time.
+# Runs the user's adapter at a small frame count and CI-overlap-compares
+# against the shipped reference card. Used as a regression test for the
+# harness mechanics (protocol, channel, statistical aggregation) and as
+# a smoke test for anyone setting up the harness for the first time.
 #
-# Layout assumption: the bundled adapter and the shipped reference card
-# live next to perf_card.py in the same directory.
+# Layout assumption: the shipped reference card lives next to
+# perf_card.py. The adapter is supplied by the user (--decoder) — no
+# vendor-specific adapter is bundled.
 
-BUNDLED_ADAPTER_BASENAME = "perf_card_lunalink_adapter.py"
 SHIPPED_REFERENCE_BASENAME = "perf_card_reference_card.json"
 SELF_TEST_FRAMES_PER_SEED = 50
 
 
 def cmd_self_test(args: argparse.Namespace) -> int:
     here = Path(__file__).resolve().parent
-    adapter = here / BUNDLED_ADAPTER_BASENAME
     reference = here / SHIPPED_REFERENCE_BASENAME
 
-    if not adapter.exists():
-        print(f"bundled adapter not found: {adapter}", file=sys.stderr)
-        return 2
     if not reference.exists():
         print(f"shipped reference card not found: {reference}", file=sys.stderr)
         print(
-            "(Generate by running the lunalink adapter at production frame counts "
-            "with --out perf_card_reference_card.json — see README.)",
+            "(Maintainer task: generate by running the reference adapter "
+            "at production frame counts and writing the result to "
+            "perf_card_reference_card.json — see README.)",
             file=sys.stderr,
         )
         return 2
@@ -1395,9 +1464,10 @@ def cmd_self_test(args: argparse.Namespace) -> int:
     ref_card = json.loads(reference.read_text(encoding="utf-8"))
     reference_anchor = ref_card.get("reference_anchor", {})
 
+    decoder_cmd = shlex.split(args.decoder)
     print(f"[self-test] reference: {reference}", file=sys.stderr)
     print(
-        f"[self-test] running bundled adapter at "
+        f"[self-test] running adapter {decoder_cmd} at "
         f"frames_per_seed={args.frames_per_seed} "
         f"(reference card frames_per_seed may differ — comparison is CI-overlap)…",
         file=sys.stderr,
@@ -1405,7 +1475,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
 
     code_ids = [CODE_BY_NAME[c.strip()] for c in args.codes.split(",")]
     fresh = run_harness(
-        decoder_cmd=[sys.executable, str(adapter)],
+        decoder_cmd=decoder_cmd,
         code_ids=code_ids,
         frames_per_seed=args.frames_per_seed,
         max_iters=DEFAULT_MAX_ITERS,
@@ -1798,10 +1868,16 @@ def build_parser() -> argparse.ArgumentParser:
     stp = sub.add_parser(
         "self-test",
         help=(
-            "Run the bundled lunalink adapter against the shipped reference "
-            "card; PASS iff fresh and reference are CI-overlap-tied at every "
-            "grid point and verdicts agree."
+            "Run an adapter against the shipped reference card; PASS iff "
+            "fresh and reference are CI-overlap-tied at every grid point "
+            "and verdicts agree. Useful as a smoke-test for a new adapter "
+            "or as a regression check that the harness still talks to the "
+            "reference implementation."
         ),
+    )
+    stp.add_argument(
+        "--decoder", required=True,
+        help="Adapter executable (shell-quoted; can include args).",
     )
     stp.add_argument(
         "--codes", default="SB1,SF2,SF3",

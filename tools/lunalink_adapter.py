@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
-"""Reference decoder adapter wrapping lunalink's Python bindings.
+"""Lunalink decode adapter — MAINTAINER TOOL, NOT RUNTIME.
 
-Implements the perf-card binary stdio protocol from
-`shaping/decoder-performance-card.md`. Calls into lunalink's
-`ldpc_decode` (sum-product) and `bch_decode_soft` (soft-ML inner-product
-BCH) for SF2/SF3 and SB1 respectively.
+This file imports lunalink. It is used by the maintainer to regenerate
+the shipped reference card (perf_card_reference_card.json). The harness
+itself does NOT import lunalink; codewords come from the shipped
+perf_card_reference_codewords.npz pool, and adapters are provided by
+each team independently.
 
-This is the standard's reference exemplar adapter — the harness paired
-with this adapter on the shipped reference vector set produces the
-canonical lunalink algo card. Other teams implement their own adapter
-in the same protocol and run the harness against it to produce their
-own card; `perf-card compare` then ranks them.
+Long-term plan (V8-b): this adapter moves into the lunalink repository,
+exposed as a console-script entry point (e.g., `lunalink-perf-card-adapter`).
+After that move, test-vectors will carry no lunalink-dependent code.
 
-Usage:
+Maintainer usage:
+
+    python perf_card.py self-test --decoder "python tools/lunalink_adapter.py"
+
+Or to regenerate the shipped reference card:
+
     python perf_card.py run \\
-        --decoder "python perf_card_lunalink_adapter.py" \\
-        --codes SB1,SF2,SF3 \\
-        --frames-per-seed 5000 \\
-        --decoder-name "lunalink ldpc_decode (sum-product, float64)" \\
-        --decoder-algorithm "Layered Sum-Product BP (phi-transform)" \\
-        --decoder-early-termination "syndrome check every iteration" \\
-        --sb1-decoder-name "lunalink bch_decode_soft" \\
-        --sb1-decoder-class "soft_ML" \\
-        --sb1-decoder-algorithm "exhaustive ML over inner-product LLR" \\
-        --out lunalink_algo_card.json
+        --decoder "python tools/lunalink_adapter.py" \\
+        --frames-per-seed 200 \\
+        --reference-anchor-tag v0.6.0 \\
+        --out perf_card_reference_card.json
 """
 
 from __future__ import annotations
@@ -43,21 +41,28 @@ from lunalink.afs import (  # type: ignore[import-not-found]
 )
 
 
-# Wire protocol formats (matches perf_card.py).
+# Wire protocol formats — must match perf_card.py.
 REQUEST_HEADER_FMT  = "<BHfI"
 REQUEST_HEADER_LEN  = 11
 RESPONSE_HEADER_FMT = "<BHI"
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION    = "1.0"
 
-# Code metadata keyed by wire code_id.
-N_INFO = {0: 9, 1: 1200, 2: 870}
+N_INFO    = {0: 9, 1: 1200, 2: 870}
 LDPC_TYPE = {1: LdpcSubframe.SF2, 2: LdpcSubframe.SF3}
 
 
+def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
+    info = np.zeros(9, dtype=np.uint8)
+    info[0] = (fid_val >> 1) & 1
+    info[1] = fid_val & 1
+    for i in range(7):
+        info[2 + i] = (toi_val >> (6 - i)) & 1
+    return info
+
+
 def do_handshake(stdin, stdout) -> None:
-    """Read the harness's HandshakeRequest and reply with HandshakeAck."""
     n = struct.unpack("<I", stdin.read(4))[0]
-    _ = json.loads(stdin.read(n))  # we don't act on the request fields
+    _ = json.loads(stdin.read(n))
     resp = json.dumps({
         "type": "handshake_ack",
         "protocol_version": PROTOCOL_VERSION,
@@ -81,18 +86,7 @@ def do_handshake(stdin, stdout) -> None:
     stdout.flush()
 
 
-def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
-    """Must match perf_card.py's pack_sb1_info exactly."""
-    info = np.zeros(9, dtype=np.uint8)
-    info[0] = (fid_val >> 1) & 1
-    info[1] = fid_val & 1
-    for i in range(7):
-        info[2 + i] = (toi_val >> (6 - i)) & 1
-    return info
-
-
 def decode_sb1(llrs: np.ndarray) -> tuple[np.ndarray, int, int]:
-    """Returns (info_bits, status, iters_used). BCH is exhaustive ML — no iters."""
     res = bch_decode_soft(llrs.astype(np.float32))
     info = pack_sb1_info(int(res.fid), int(res.toi))
     status = 0 if res.status == BchStatus.OK else 2
@@ -102,7 +96,6 @@ def decode_sb1(llrs: np.ndarray) -> tuple[np.ndarray, int, int]:
 def decode_ldpc(
     code_id: int, llrs: np.ndarray, max_iters: int
 ) -> tuple[np.ndarray, int, int]:
-    """Returns (info_bits, status, iters_used)."""
     subframe = LDPC_TYPE[code_id]
     decoded, status_enum = ldpc_decode(
         subframe, llrs.astype(np.float32), int(max_iters)
@@ -119,17 +112,12 @@ def decode_ldpc(
 def main() -> int:
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
-
     do_handshake(stdin, stdout)
 
     while True:
         hdr = stdin.read(REQUEST_HEADER_LEN)
         if not hdr:
             return 0
-        if len(hdr) < REQUEST_HEADER_LEN:
-            print(f"[adapter] short header: {len(hdr)} bytes", file=sys.stderr)
-            return 1
-
         code_id, max_iters, _sigma_sq, n_bits = struct.unpack(
             REQUEST_HEADER_FMT, hdr
         )
@@ -141,13 +129,6 @@ def main() -> int:
             info, status, iters = decode_ldpc(code_id, llrs, max_iters)
 
         n_info = N_INFO[code_id]
-        if len(info) != n_info:
-            print(
-                f"[adapter] wrong n_info: got {len(info)}, expected {n_info}",
-                file=sys.stderr,
-            )
-            return 1
-
         stdout.write(struct.pack(RESPONSE_HEADER_FMT, status, iters, n_info))
         stdout.write(info.tobytes())
         stdout.flush()
