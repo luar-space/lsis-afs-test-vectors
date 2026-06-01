@@ -1463,6 +1463,260 @@ def cmd_self_test(args: argparse.Namespace) -> int:
     return 1
 
 
+# ─── `leaderboard` subcommand ────────────────────────────────────────────
+#
+# N-way ranking across multiple algo cards. Each code (SB1, SF2, SF3) is
+# ranked independently. Cards that pass the verdict are ranked above
+# cards that fail; within passes, lower achievement Eb/N0 (LDPC) or
+# lower FER (SB1) is better. Statistical ties are grouped via CI overlap.
+
+def _card_label(path: Path, card: dict[str, Any]) -> str:
+    """Display label: filename stem + decoder identity hint."""
+    return path.stem
+
+
+def _load_card(p: str) -> tuple[Path, dict[str, Any]]:
+    path = Path(p)
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def _ldpc_subframe_entry(
+    label: str,
+    path: Path,
+    card: dict[str, Any],
+    sf_key: str,
+) -> dict[str, Any] | None:
+    """Pull SF2 or SF3_SF4 ranking info out of one card."""
+    sub = card.get("ldpc", {}).get("subframes", {}).get(sf_key)
+    if not sub:
+        return None
+    v = sub.get("verdict") or {}
+    if "pass" not in v:
+        return None
+    # Find the waterfall row matching the verdict point (for CI lookup).
+    wf = sub.get("waterfall", [])
+    op_row = next(
+        (r for r in wf if abs(r["eb_n0_db"] - v.get("at_eb_n0_db", -1)) < 1e-6),
+        None,
+    )
+    return {
+        "label": label,
+        "path": str(path),
+        "decoder": card.get("ldpc", {}).get("decoder", "?"),
+        "pass": bool(v["pass"]),
+        "at_eb_n0_db": v["at_eb_n0_db"],
+        "ber": v.get("ber", 0.0),
+        "fer": op_row["fer"] if op_row else 0.0,
+        "ci_fer": op_row["ci_fer"] if op_row else 0.0,
+        "frames": op_row["frames"] if op_row else 0,
+    }
+
+
+def _sb1_entry(
+    label: str, path: Path, card: dict[str, Any]
+) -> dict[str, Any] | None:
+    sb1 = card.get("sb1")
+    if not sb1:
+        return None
+    v = sb1.get("verdict") or {}
+    if "pass" not in v:
+        return None
+    wf = sb1.get("waterfall", [])
+    op_row = next(
+        (r for r in wf if abs(r["eb_n0_db"] - v.get("at_eb_n0_db", -1)) < 1e-6),
+        None,
+    )
+    return {
+        "label": label,
+        "path": str(path),
+        "decoder": sb1.get("decoder", {}).get("name", "?"),
+        "decoder_class": sb1.get("decoder", {}).get("class", "?"),
+        "pass": bool(v["pass"]),
+        "at_eb_n0_db": v["at_eb_n0_db"],
+        "fer": v.get("fer", op_row["fer"] if op_row else 0.0),
+        "ci_fer": v.get("ci_fer", op_row["ci_fer"] if op_row else 0.0),
+        "frames": op_row["frames"] if op_row else 0,
+    }
+
+
+def _rank_with_ties(
+    entries: list[dict[str, Any]],
+    *,
+    sort_key: str,
+    secondary_key: str,
+) -> list[dict[str, Any]]:
+    """Sort by sort_key ascending, then group adjacent entries whose CIs
+    overlap at the comparison point. Returns entries annotated with `rank`
+    (1-indexed) and `tied_with_prev` (bool).
+
+    Sort_key is the primary metric (e.g., 'at_eb_n0_db' or 'fer').
+    Secondary_key is the FER at the comparison point used for CI overlap.
+    """
+    if not entries:
+        return entries
+    # Passing entries first (by sort_key asc), then failing.
+    passing = sorted(
+        [e for e in entries if e["pass"]],
+        key=lambda e: (e[sort_key], e[secondary_key]),
+    )
+    failing = sorted(
+        [e for e in entries if not e["pass"]],
+        key=lambda e: e.get("ber", e.get("fer", float("inf"))),
+    )
+    # Assign ranks within passing, group adjacent on CI overlap at
+    # secondary_key.
+    rank = 1
+    for i, e in enumerate(passing):
+        if i == 0:
+            e["rank"] = rank
+            e["tied_with_prev"] = False
+            continue
+        prev = passing[i - 1]
+        # Tied iff same achievement bucket AND CI overlap at the
+        # operating row.
+        same_bucket = abs(e[sort_key] - prev[sort_key]) < 1e-9
+        overlap = (
+            _ci_overlap(
+                e[secondary_key], e.get("ci_fer", 0.0),
+                prev[secondary_key], prev.get("ci_fer", 0.0),
+            ) == "="
+        )
+        if same_bucket and overlap:
+            e["rank"] = prev["rank"]
+            e["tied_with_prev"] = True
+        else:
+            rank = i + 1
+            e["rank"] = rank
+            e["tied_with_prev"] = False
+    for e in failing:
+        e["rank"] = None  # FAIL — below all passing
+        e["tied_with_prev"] = False
+    return passing + failing
+
+
+def _render_ldpc_table(title: str, entries: list[dict[str, Any]]) -> None:
+    print(title)
+    print("─" * len(title))
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}"
+          f"{'at Eb/N0':>9}  {'FER':>10}  {'± CI':>10}")
+    print("  " + "─" * 110)
+    for e in entries:
+        if e["pass"]:
+            rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
+            print(
+                f"  {rank_str:<6}"
+                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
+                f"{e['at_eb_n0_db']:>6.1f} dB  "
+                f"{e['fer']:>10.6f}  {e['ci_fer']:>10.6f}"
+            )
+        else:
+            print(
+                f"  {'FAIL':<6}"
+                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
+                f"   best BER {e.get('ber', 0.0):.2e}"
+            )
+    print()
+
+
+def _render_sb1_table(entries: list[dict[str, Any]]) -> None:
+    title = "SB1 — verdict: FER < 0.01 at Es/N0 >= 0 dB"
+    print(title)
+    print("─" * len(title))
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}"
+          f"{'FER':>10}  {'± CI':>10}")
+    print("  " + "─" * 100)
+    for e in entries:
+        if e["pass"]:
+            rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
+            decoder_with_class = f"{e['decoder'][:30]} ({e['decoder_class']})"
+            print(
+                f"  {rank_str:<6}"
+                f"{e['label'][:30]:<32}{decoder_with_class[:38]:<40}"
+                f"{e['fer']:>10.6f}  {e['ci_fer']:>10.6f}"
+            )
+        else:
+            print(
+                f"  {'FAIL':<6}"
+                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
+                f"{e['fer']:>10.6f}"
+            )
+    print()
+
+
+def cmd_leaderboard(args: argparse.Namespace) -> int:
+    cards: list[tuple[Path, dict[str, Any]]] = []
+    for p in args.cards:
+        try:
+            cards.append(_load_card(p))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"cannot load {p}: {exc}", file=sys.stderr)
+            return 2
+
+    # Anchor consistency check.
+    anchors = {
+        json.dumps(c.get("reference_anchor", {}), sort_keys=True)
+        for _, c in cards
+    }
+    if len(anchors) > 1:
+        print(
+            "WARNING: cards reference different anchors — ranking may not be fair.",
+            file=sys.stderr,
+        )
+        for path, c in cards:
+            print(
+                f"  {path.name}: {c.get('reference_anchor', {})}",
+                file=sys.stderr,
+            )
+
+    # Build per-code entries.
+    sf2: list[dict[str, Any]] = []
+    sf3: list[dict[str, Any]] = []
+    sb1: list[dict[str, Any]] = []
+    for path, card in cards:
+        label = _card_label(path, card)
+        if e := _ldpc_subframe_entry(label, path, card, "SF2"):
+            sf2.append(e)
+        if e := _ldpc_subframe_entry(label, path, card, "SF3_SF4"):
+            sf3.append(e)
+        if e := _sb1_entry(label, path, card):
+            sb1.append(e)
+
+    # Rank (sort by achievement Eb/N0 for LDPC, by op-point FER for SB1).
+    sf2 = _rank_with_ties(sf2, sort_key="at_eb_n0_db", secondary_key="fer")
+    sf3 = _rank_with_ties(sf3, sort_key="at_eb_n0_db", secondary_key="fer")
+    sb1 = _rank_with_ties(sb1, sort_key="fer", secondary_key="fer")
+
+    if args.json:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "n_cards": len(cards),
+                    "anchor_consistent": (len(anchors) == 1),
+                    "ldpc_SF2": sf2,
+                    "ldpc_SF3_SF4": sf3,
+                    "sb1": sb1,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        return 0
+
+    # Human-readable.
+    print(f"\nLeaderboard — {len(cards)} card(s)\n")
+    if sf2:
+        _render_ldpc_table(
+            "LDPC SF2 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf2
+        )
+    if sf3:
+        _render_ldpc_table(
+            "LDPC SF3/SF4 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf3
+        )
+    if sb1:
+        _render_sb1_table(sb1)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="perf_card",
@@ -1562,6 +1816,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the per-grid-point CI-overlap table.",
     )
     stp.set_defaults(func=cmd_self_test)
+
+    # ── leaderboard ─────────────────────────────────────────────────────
+    lbp = sub.add_parser(
+        "leaderboard",
+        help=(
+            "N-way ranking across multiple algo cards. Per code: cards "
+            "that pass verdict are ranked ahead of failures; within "
+            "passes, lower achievement Eb/N0 (LDPC) or lower FER (SB1) "
+            "is better; statistical ties grouped via CI overlap."
+        ),
+    )
+    lbp.add_argument(
+        "cards", nargs="+",
+        help="Two or more algo card JSON files to rank.",
+    )
+    lbp.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON instead of human-readable table.",
+    )
+    lbp.set_defaults(func=cmd_leaderboard)
 
     return p
 
