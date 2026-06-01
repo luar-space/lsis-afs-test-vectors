@@ -88,7 +88,42 @@ uv sync
 uv run lsis-afs-validate check-annex3
 ```
 
-## Current release — `v0.4.0` (Levels 1 + 2 + 3 + 4)
+## Perf-card — decoder benchmark harness (new in `v0.7.0`)
+
+Alongside the L1–L5 interoperability vectors, this release ships a
+**Decoder Performance Card** standard: a reproducible FEC-decoder
+benchmark designed for cross-team comparison.
+
+Adopters supply an adapter implementing a small binary stdio protocol
+(LLRs in → info bits out). The harness drives the adapter through a
+pinned Eb/N0 grid, emits a structured `sp_results.json` algo card,
+and statistically compares it against other teams' cards.
+
+```bash
+# Run your adapter through the standard, emit your algo card.
+perf-card run --decoder ./my_adapter --out my_card.json
+
+# Check it conforms to the schema.
+perf-card validate my_card.json
+
+# Compare against the shipped lunalink reference.
+perf-card compare my_card.json perf_card_reference_card.json --verbose
+
+# Or rank N submissions at once.
+perf-card leaderboard *.json
+```
+
+The standard is specified in [`PERF-CARD-STANDARD.md`](./PERF-CARD-STANDARD.md).
+Adapter skeletons in Python and C live under
+[`perf_card_templates/`](./perf_card_templates/) — fill in three TODO
+blocks and you have a working adapter.
+
+The shipped reference algo card (`perf_card_reference_card.json`) is
+produced by the lunalink reference decoder running through the harness
+at 5000 frames/seed (~10 minutes, 9 parallel workers). It's the
+canonical comparison target until other teams submit their cards.
+
+## Current release — `v0.7.0` (Levels 1–5 + perf-card)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five
