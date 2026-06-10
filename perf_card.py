@@ -1951,6 +1951,302 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── `render` subcommand ─────────────────────────────────────────────────
+#
+# Pretty rendering of an algo card to PNG / PDF / SVG — for showing
+# numbers to humans (judges, slide decks, README badges). Optional
+# dependency on matplotlib (pip install 'lsis-afs-test-vectors[render]').
+
+# Visual style — print-friendly, high-contrast, single-color-blind-safe.
+RENDER_PALETTE = {
+    "fer": "#2563eb",  # blue
+    "ber": "#ea580c",  # orange
+    "ci_band": "#93c5fd",  # light blue
+    "spec_bar": "#dc2626",  # red
+    "verdict_pass": "#16a34a",  # green
+    "verdict_fail": "#dc2626",  # red
+    "grid": "#e5e7eb",  # light gray
+    "text_dim": "#6b7280",
+}
+
+
+def _floor_for_log(x: float) -> float:
+    """Clip a value above zero so it plots on a log axis."""
+    return max(x, 1e-7)
+
+
+def _wilson_bounds(p: float, ci: float, frames: int) -> tuple[float, float]:
+    """Return CI lower / upper bounds suitable for log-axis plotting.
+
+    Wilson's half-width `ci` is centred on the empirical proportion `p`,
+    which goes to zero when no errors are observed. Naive `p - ci` is
+    then negative and gets clipped to the log floor, producing a
+    misleading "cliff" in the CI band. Instead we report the Wilson-style
+    upper bound at p=0 (1 − (alpha/2)^(1/n) ≈ z²/(n+z²)) for the floor,
+    and the usual p+ci on the high side.
+    """
+    if frames <= 0:
+        return 1e-7, 1.5
+    if p == 0.0:
+        # Tight one-sided upper bound when zero errors observed.
+        upper = ci  # Wilson half-width at p=0 IS the upper bound
+        return 1e-7, max(upper, 1e-7)
+    return max(p - ci, 1e-7), min(p + ci, 1.5)
+
+
+def _ci_band_arrays(wf: list[dict[str, Any]]) -> tuple[list[float], list[float]]:
+    """Vector form of _wilson_bounds across a waterfall."""
+    los: list[float] = []
+    his: list[float] = []
+    for p in wf:
+        lo, hi = _wilson_bounds(p["fer"], p["ci_fer"], p.get("frames", 0))
+        los.append(lo)
+        his.append(hi)
+    return los, his
+
+
+def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
+    """Plot one LDPC subframe's FER + BER waterfall."""
+    wf = sub["waterfall"]
+    ebs = [p["eb_n0_db"] for p in wf]
+    fers = [_floor_for_log(p["fer"]) for p in wf]
+    bers = [_floor_for_log(p.get("ber", 0.0)) for p in wf]
+    fers_lo, fers_hi = _ci_band_arrays(wf)
+
+    ax.fill_between(
+        ebs, fers_lo, fers_hi,
+        color=RENDER_PALETTE["ci_band"], alpha=0.35, label="FER 95% CI",
+    )
+    ax.semilogy(ebs, fers, "o-", color=RENDER_PALETTE["fer"],
+                linewidth=2.5, markersize=7, label="FER")
+    ax.semilogy(ebs, bers, "s--", color=RENDER_PALETTE["ber"],
+                linewidth=1.5, markersize=5, label="BER")
+
+    ax.axhline(LDPC_VERDICT_BAR_BER, color=RENDER_PALETTE["spec_bar"],
+               linestyle=":", linewidth=1.5, alpha=0.7)
+    ax.text(ebs[0], LDPC_VERDICT_BAR_BER * 1.6, "spec: BER < 1e-5",
+            color=RENDER_PALETTE["spec_bar"], fontsize=8,
+            va="bottom", ha="left")
+
+    # Verdict achievement: shade region from achievement Eb/N0 to right
+    # edge instead of drawing a tall vertical bar over the curves.
+    v = sub.get("verdict") or {}
+    if v.get("pass"):
+        x_pass = v["at_eb_n0_db"]
+        ax.axvspan(x_pass, ebs[-1],
+                   color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
+        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"],
+                   linewidth=1.5, alpha=0.6)
+        # Achievement annotation at the top of the panel, well clear of curves.
+        ax.annotate(
+            f"PASS\n@ {x_pass:.1f} dB",
+            xy=(x_pass, 1.0),
+            xytext=(x_pass + 0.05, 0.7),
+            fontsize=9, fontweight="bold",
+            color=RENDER_PALETTE["verdict_pass"],
+            ha="left", va="top",
+        )
+
+    code = sub.get("code", {})
+    ax.set_title(
+        f"LDPC {title}  (k={code.get('k', '?')}, n={code.get('n', '?')}, "
+        f"R={code.get('rate', '?')})",
+        fontsize=12, fontweight="bold",
+    )
+    ax.set_xlabel("Eb/N0 (dB)")
+    ax.set_ylabel("error rate (log)")
+    ax.grid(True, which="both", color=RENDER_PALETTE["grid"], linewidth=0.5)
+    ax.set_ylim(1e-6, 1.5)
+    ax.legend(loc="lower left", fontsize=9, framealpha=0.95)
+
+
+def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
+    """Plot SB1/BCH FER waterfall."""
+    wf = sb1["waterfall"]
+    ebs = [p["eb_n0_db"] for p in wf]
+    fers = [_floor_for_log(p["fer"]) for p in wf]
+    fers_lo, fers_hi = _ci_band_arrays(wf)
+
+    ax.fill_between(ebs, fers_lo, fers_hi,
+                    color=RENDER_PALETTE["ci_band"], alpha=0.35,
+                    label="FER 95% CI")
+    ax.semilogy(ebs, fers, "o-", color=RENDER_PALETTE["fer"],
+                linewidth=2.5, markersize=7, label="FER")
+
+    ax.axhline(SB1_VERDICT_BAR_FER, color=RENDER_PALETTE["spec_bar"],
+               linestyle=":", linewidth=1.5, alpha=0.7)
+    ax.text(ebs[0], SB1_VERDICT_BAR_FER * 1.6,
+            "spec: FER < 0.01 (Frame-Detection > 99%)",
+            color=RENDER_PALETTE["spec_bar"], fontsize=8,
+            va="bottom", ha="left")
+
+    v = sb1.get("verdict") or {}
+    if v.get("pass"):
+        x_pass = v["at_eb_n0_db"]
+        ax.axvspan(x_pass, ebs[-1],
+                   color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
+        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"],
+                   linewidth=1.5, alpha=0.6)
+        ax.annotate(
+            f"PASS @ {x_pass:.1f} dB",
+            xy=(x_pass, 1.0),
+            xytext=(x_pass - 0.2, 0.5),
+            fontsize=10, fontweight="bold",
+            color=RENDER_PALETTE["verdict_pass"],
+            ha="right", va="center",
+        )
+
+    decoder = sb1.get("decoder", {})
+    code = sb1.get("code", {})
+    ax.set_title(
+        f"SB1 / BCH  (k={code.get('k', '?')}, n={code.get('n', '?')}, "
+        f"R={code.get('rate', '?')}, {decoder.get('class', '?')})",
+        fontsize=12, fontweight="bold",
+    )
+    ax.set_xlabel("Eb/N0 (dB)")
+    ax.set_ylabel("FER (log)")
+    ax.grid(True, which="both", color=RENDER_PALETTE["grid"], linewidth=0.5)
+    ax.set_ylim(1e-5, 1.5)
+    ax.legend(loc="lower left", fontsize=9, framealpha=0.95)
+
+
+def _draw_verdict_panel(ax, card: dict[str, Any]) -> None:
+    """Verdict summary panel with PASS/FAIL pill badges."""
+    ax.axis("off")
+    rows = []
+    if "ldpc" in card:
+        for sf_name, sub in card["ldpc"].get("subframes", {}).items():
+            v = sub.get("verdict") or {}
+            label = "LDPC " + ("SF3/SF4" if sf_name == "SF3_SF4" else sf_name)
+            rows.append((
+                label,
+                v.get("criterion", "?"),
+                f"{v.get('at_eb_n0_db', '?')} dB",
+                bool(v.get("pass")),
+            ))
+    if "sb1" in card:
+        v = card["sb1"].get("verdict") or {}
+        rows.append((
+            "SB1 (BCH)",
+            v.get("criterion", "?"),
+            f"{v.get('at_eb_n0_db', '?')} dB",
+            bool(v.get("pass")),
+        ))
+
+    ax.text(0.02, 0.95, "Verdicts", fontsize=14, fontweight="bold",
+            transform=ax.transAxes, va="top")
+
+    if not rows:
+        return
+    row_h = 0.78 / len(rows)
+    for i, (label, criterion, achieved, passed) in enumerate(rows):
+        y = 0.85 - (i + 0.5) * row_h
+        color = (RENDER_PALETTE["verdict_pass"] if passed
+                 else RENDER_PALETTE["verdict_fail"])
+        status = "PASS" if passed else "FAIL"
+
+        ax.text(0.02, y, "  " + status + "  ",
+                fontsize=11, fontweight="bold", color="white",
+                bbox={"facecolor": color, "edgecolor": "none",
+                      "boxstyle": "round,pad=0.4"},
+                transform=ax.transAxes, va="center")
+        ax.text(0.20, y, label, fontsize=11, fontweight="bold",
+                transform=ax.transAxes, va="center")
+        ax.text(0.20, y - row_h * 0.30, criterion, fontsize=8,
+                color=RENDER_PALETTE["text_dim"],
+                transform=ax.transAxes, va="center")
+        ax.text(0.98, y, f"achieved @ {achieved}", fontsize=10,
+                color=color, fontweight="bold",
+                transform=ax.transAxes, va="center", ha="right")
+
+
+def _draw_header_footer(fig, card: dict[str, Any]) -> None:
+    ldpc = card.get("ldpc", {})
+    sb1_dec = card.get("sb1", {}).get("decoder", {})
+    anchor = card.get("reference_anchor", {})
+    methodology = card.get("methodology", {})
+    channel = card.get("channel", {})
+
+    fig.suptitle("LSIS-AFS — Decoder Performance Card",
+                 fontsize=18, fontweight="bold", y=0.97)
+    subtitle = (
+        f"LDPC: {ldpc.get('decoder', '?')}   ·   "
+        f"SB1: {sb1_dec.get('name', '?')} ({sb1_dec.get('class', '?')})"
+    )
+    fig.text(0.5, 0.935, subtitle, ha="center", fontsize=11,
+             color=RENDER_PALETTE["text_dim"])
+
+    anchor_text = (
+        f"reference: {anchor.get('repo', '?')}"
+        f"@{anchor.get('tag', anchor.get('commit', '?'))}"
+    )
+    fig.text(0.99, 0.97, anchor_text, ha="right", fontsize=8,
+             color=RENDER_PALETTE["text_dim"])
+
+    footer = (
+        f"{channel.get('model', '?')}   ·   "
+        f"σ = {channel.get('sigma_formula', '?')}   ·   "
+        f"seeds: {methodology.get('seeds', '?')}   ·   "
+        f"messages: {methodology.get('message_ensemble', '?')}   ·   "
+        f"CI: {methodology.get('ci_method', '?')}   ·   "
+        f"tier: {card.get('tier', '?')}   ·   "
+        f"{card.get('produced_at', '?')}"
+    )
+    fig.text(0.5, 0.012, footer, ha="center", fontsize=7,
+             color=RENDER_PALETTE["text_dim"])
+
+
+def render_card(card: dict[str, Any], out_path: Path) -> None:
+    """Render an algo card to PNG / PDF / SVG (matplotlib infers from suffix)."""
+    import matplotlib  # type: ignore[import-not-found]
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+
+    fig = plt.figure(figsize=(15, 10), dpi=120)
+    gs = fig.add_gridspec(
+        2, 2,
+        height_ratios=[3, 3],
+        hspace=0.40, wspace=0.22,
+        left=0.06, right=0.97, top=0.88, bottom=0.05,
+    )
+
+    _draw_header_footer(fig, card)
+
+    sf2 = card.get("ldpc", {}).get("subframes", {}).get("SF2")
+    sf3 = card.get("ldpc", {}).get("subframes", {}).get("SF3_SF4")
+    if sf2:
+        _plot_ldpc_waterfall(fig.add_subplot(gs[0, 0]), sf2, "SF2")
+    if sf3:
+        _plot_ldpc_waterfall(fig.add_subplot(gs[0, 1]), sf3, "SF3/SF4")
+    if "sb1" in card:
+        _plot_sb1_waterfall(fig.add_subplot(gs[1, 0]), card["sb1"])
+    _draw_verdict_panel(fig.add_subplot(gs[1, 1]), card)
+
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    try:
+        import matplotlib  # noqa: F401 — probe optional dep
+    except ImportError:
+        print(
+            "render requires matplotlib. Install with: "
+            "pip install 'lsis-afs-test-vectors[render]'",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        card = json.loads(Path(args.card).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"cannot load {args.card}: {exc}", file=sys.stderr)
+        return 2
+    out_path = Path(args.out)
+    render_card(card, out_path)
+    print(f"Wrote {out_path}", file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="perf_card",
@@ -2100,6 +2396,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON instead of human-readable table.",
     )
     lbp.set_defaults(func=cmd_leaderboard)
+
+    # ── render ──────────────────────────────────────────────────────────
+    rdp = sub.add_parser(
+        "render",
+        help=(
+            "Render an algo card to a figure file (PNG / PDF / SVG inferred "
+            "from --out suffix). Single-page layout: LDPC waterfalls, SB1 "
+            "FER, verdict pills. Pretty enough for a slide. "
+            "Requires matplotlib (pip install 'lsis-afs-test-vectors[render]')."
+        ),
+    )
+    rdp.add_argument("card", help="Algo card JSON to render.")
+    rdp.add_argument(
+        "--out", required=True,
+        help="Output path. Format inferred from extension: .png / .pdf / .svg.",
+    )
+    rdp.set_defaults(func=cmd_render)
 
     return p
 

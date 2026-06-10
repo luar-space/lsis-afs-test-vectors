@@ -30,6 +30,12 @@ dependencies = [
     "numpy>=1.20",
 ]
 
+[project.optional-dependencies]
+# matplotlib is needed only for `perf-card render` (pretty waterfall +
+# verdict figures). Keeps the core harness lean for adopters who just
+# want run/validate/compare/leaderboard.
+render = ["matplotlib>=3.6"]
+
 [project.scripts]
 lsis-afs-validate = "validate:main"
 perf-card = "perf_card:main"
