@@ -61,7 +61,7 @@ import numpy as np
 
 # Pinned Eb/N0 grids — matching lunalink's ldpc_characterise / bch_characterise.
 LDPC_GRID = (0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0)
-BCH_GRID  = (2.0, 3.0, 4.0, 5.0, 6.0, 7.6)
+BCH_GRID = (2.0, 3.0, 4.0, 5.0, 6.0, 7.6)
 
 # Per-grid-point frames_per_seed override (BCH bumps at the operating point
 # for tighter CI on the verdict row, mirroring lunalink).
@@ -102,8 +102,8 @@ DEFAULT_MAX_ITERS = 50
 DEFAULT_FRAMES_PER_SEED = 5000  # matches lunalink LDPC characterise
 
 # Wire protocol format strings.
-REQUEST_HEADER_FMT  = "<BHfI"
-REQUEST_HEADER_LEN  = struct.calcsize(REQUEST_HEADER_FMT)   # 11
+REQUEST_HEADER_FMT = "<BHfI"
+REQUEST_HEADER_LEN = struct.calcsize(REQUEST_HEADER_FMT)  # 11
 RESPONSE_HEADER_FMT = "<BHI"
 RESPONSE_HEADER_LEN = struct.calcsize(RESPONSE_HEADER_FMT)  # 7
 
@@ -116,7 +116,7 @@ HARNESS_VERSION = "1.0.0"
 LDPC_VERDICT_BAR_BER = 1e-5
 LDPC_OPERATING_POINT_EB_N0_DB = 0.0  # = Es/N0 0 dB at R=1/2
 SB1_VERDICT_BAR_FER = 0.01
-SB1_OPERATING_POINT_EB_N0_DB = 7.6   # = Es/N0 0 dB at R=9/52
+SB1_OPERATING_POINT_EB_N0_DB = 7.6  # = Es/N0 0 dB at R=9/52
 
 
 # ─── BCH (FID, TOI) ↔ 9-bit info packing convention ──────────────────────
@@ -124,6 +124,7 @@ SB1_OPERATING_POINT_EB_N0_DB = 7.6   # = Es/N0 0 dB at R=9/52
 # The standard packs the 9 SB1 info bits as: FID in bits 0..1 (MSB-first),
 # TOI in bits 2..8 (MSB-first). Adapters that recover SB1 (FID, TOI) MUST
 # pack them this way in their response. See shaping doc § Schema strawman.
+
 
 def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
     info = np.zeros(9, dtype=np.uint8)
@@ -156,12 +157,12 @@ REFERENCE_CODEWORDS_BASENAME = "perf_card_reference_codewords.npz"
 
 @dataclass
 class CodewordPool:
-    sb1_info: np.ndarray         # (n_bch, 9)  uint8 {0,1}
-    sb1_codeword: np.ndarray     # (n_bch, 52)
-    sf2_info: np.ndarray         # (n_ldpc, 1200)
-    sf2_codeword: np.ndarray     # (n_ldpc, 2400)
-    sf3_info: np.ndarray         # (n_ldpc, 870)
-    sf3_codeword: np.ndarray     # (n_ldpc, 1740)
+    sb1_info: np.ndarray  # (n_bch, 9)  uint8 {0,1}
+    sb1_codeword: np.ndarray  # (n_bch, 52)
+    sf2_info: np.ndarray  # (n_ldpc, 1200)
+    sf2_codeword: np.ndarray  # (n_ldpc, 2400)
+    sf3_info: np.ndarray  # (n_ldpc, 870)
+    sf3_codeword: np.ndarray  # (n_ldpc, 1740)
 
     def pair(self, code_id: int, index: int) -> tuple[np.ndarray, np.ndarray]:
         """Return (info_bits, codeword) for `code_id` at `index` modulo pool size."""
@@ -188,15 +189,17 @@ def load_codeword_pool() -> CodewordPool:
             f"maintainer task, requires lunalink — to regenerate.)"
         )
     with np.load(path) as z:
+
         def unpack(name: str, n_bits: int) -> np.ndarray:
             return np.unpackbits(z[name], axis=1)[:, :n_bits]
+
         pool = CodewordPool(
-            sb1_info     = unpack("sb1_info_packed",      9),
-            sb1_codeword = unpack("sb1_codeword_packed", 52),
-            sf2_info     = unpack("sf2_info_packed",   1200),
-            sf2_codeword = unpack("sf2_codeword_packed", 2400),
-            sf3_info     = unpack("sf3_info_packed",    870),
-            sf3_codeword = unpack("sf3_codeword_packed", 1740),
+            sb1_info=unpack("sb1_info_packed", 9),
+            sb1_codeword=unpack("sb1_codeword_packed", 52),
+            sf2_info=unpack("sf2_info_packed", 1200),
+            sf2_codeword=unpack("sf2_codeword_packed", 2400),
+            sf3_info=unpack("sf3_info_packed", 870),
+            sf3_codeword=unpack("sf3_codeword_packed", 1740),
         )
     return pool
 
@@ -206,15 +209,13 @@ _pool_singleton: CodewordPool | None = None
 
 def get_pool() -> CodewordPool:
     """Lazy-load the codeword pool once per process."""
-    global _pool_singleton
+    global _pool_singleton  # noqa: PLW0603 — singleton lazy-init pattern
     if _pool_singleton is None:
         _pool_singleton = load_codeword_pool()
     return _pool_singleton
 
 
-def generate_and_encode(
-    code_id: int, rng: np.random.Generator
-) -> tuple[np.ndarray, np.ndarray]:
+def generate_and_encode(code_id: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     """Return (info_bits, codeword) — sampled from the shipped pool via
     a seeded random index, so two harnesses with the same seed see the
     same pairs in the same positions."""
@@ -232,6 +233,7 @@ def generate_and_encode(
 
 # ─── Wilson 95% CI half-width ────────────────────────────────────────────
 
+
 def wilson_ci_hw(errors: int, trials: int, z: float = 1.96) -> float:
     if trials == 0:
         return 0.0
@@ -242,6 +244,7 @@ def wilson_ci_hw(errors: int, trials: int, z: float = 1.96) -> float:
 
 
 # ─── Channel: σ from Eb/N0 ───────────────────────────────────────────────
+
 
 def sigma_for_eb_n0(eb_n0_db: float, rate: float) -> float:
     """σ = 1 / sqrt(2 · R · 10^(Eb_N0_db/10))."""
@@ -259,6 +262,7 @@ def sigma_for_eb_n0(eb_n0_db: float, rate: float) -> float:
 # After the ack, the protocol switches to the binary per-frame format
 # described above.
 
+
 def _send_length_prefixed_json(stream, obj: dict[str, Any]) -> None:
     payload = json.dumps(obj).encode("utf-8")
     stream.write(struct.pack("<I", len(payload)))
@@ -274,8 +278,7 @@ def _recv_length_prefixed_json(stream) -> dict[str, Any]:
     payload = stream.read(n)
     if len(payload) < n:
         raise RuntimeError(
-            f"counterparty closed stream mid-handshake "
-            f"(got {len(payload)} bytes, expected {n})"
+            f"counterparty closed stream mid-handshake (got {len(payload)} bytes, expected {n})"
         )
     return json.loads(payload)
 
@@ -283,16 +286,17 @@ def _recv_length_prefixed_json(stream) -> dict[str, Any]:
 def handshake_with_adapter(proc: subprocess.Popen[bytes]) -> dict[str, Any]:
     """Run the protocol handshake; return the adapter's self-description."""
     assert proc.stdin is not None and proc.stdout is not None
-    _send_length_prefixed_json(proc.stdin, {
-        "type": "handshake",
-        "protocol_version": PROTOCOL_VERSION,
-        "harness": {"name": HARNESS_NAME, "version": HARNESS_VERSION},
-    })
+    _send_length_prefixed_json(
+        proc.stdin,
+        {
+            "type": "handshake",
+            "protocol_version": PROTOCOL_VERSION,
+            "harness": {"name": HARNESS_NAME, "version": HARNESS_VERSION},
+        },
+    )
     resp = _recv_length_prefixed_json(proc.stdout)
     if resp.get("type") != "handshake_ack":
-        raise RuntimeError(
-            f"adapter returned wrong handshake type: {resp.get('type')!r}"
-        )
+        raise RuntimeError(f"adapter returned wrong handshake type: {resp.get('type')!r}")
     if resp.get("protocol_version") != PROTOCOL_VERSION:
         raise RuntimeError(
             f"adapter protocol_version mismatch: "
@@ -327,11 +331,12 @@ def adapter_sb1_meta(adapter_info: dict[str, Any]) -> dict[str, str]:
 
 # ─── Per-frame round-trip with the adapter ───────────────────────────────
 
+
 @dataclass
 class FramePoint:
     bit_errors: int
     frame_error: bool
-    status: int       # 0=ok, 1=not_converged, 2=error
+    status: int  # 0=ok, 1=not_converged, 2=error
     iters_used: int
 
 
@@ -354,9 +359,7 @@ def one_frame(
 
     # Request.
     request = (
-        struct.pack(
-            REQUEST_HEADER_FMT, code_id, max_iters, sigma_sq, meta["n_bits"]
-        )
+        struct.pack(REQUEST_HEADER_FMT, code_id, max_iters, sigma_sq, meta["n_bits"])
         + llrs.tobytes()
     )
     assert proc.stdin is not None and proc.stdout is not None
@@ -392,6 +395,7 @@ def one_frame(
 
 # ─── Grid-point aggregation across seeds ─────────────────────────────────
 
+
 @dataclass
 class GridPoint:
     eb_n0_db: float
@@ -400,7 +404,7 @@ class GridPoint:
     bit_errors: int = 0
     total_bits: int = 0
     not_converged: int = 0  # status == 1
-    iters_sum: int = 0      # for avg iters_used
+    iters_sum: int = 0  # for avg iters_used
 
     @property
     def fer(self) -> float:
@@ -418,18 +422,18 @@ class GridPoint:
 # Extended-tier convergence_cdf probe parameters (matches lunalink's
 # ldpc_characterise.cpp Step 5). Sweeps max_iters at the cliff Eb/N0 to
 # expose how many iterations the decoder actually needs to clear the floor.
-CONVERGENCE_PROBE_EB_N0_DB = 1.5      # cliff vicinity for R=1/2 LDPC
+CONVERGENCE_PROBE_EB_N0_DB = 1.5  # cliff vicinity for R=1/2 LDPC
 CONVERGENCE_PROBE_ITERS = (1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50)
 CONVERGENCE_PROBE_FRAMES_PER_SEED = 2000
 
 # Full-tier probes — match lunalink ldpc_characterise.cpp.
 ERROR_FLOOR_PROBE_EB_N0_DB = (2.5, 3.0)
-ERROR_FLOOR_PROBE_FRAMES_PER_SEED = 20000     # 60k per point — for upper-CI tightness
+ERROR_FLOOR_PROBE_FRAMES_PER_SEED = 20000  # 60k per point — for upper-CI tightness
 ERROR_PATTERN_PROBE_EB_N0_DB = (1.0, 1.2, 1.4)
-ERROR_PATTERN_PROBE_FRAMES = 5000             # single-seed run; per-frame bit-error counts
+ERROR_PATTERN_PROBE_FRAMES = 5000  # single-seed run; per-frame bit-error counts
 ERROR_PATTERN_HISTOGRAM_BINS = ((1, 5), (6, 20), (21, 100), (101, 300), (301, None))
 SATURATION_STRESS_EB_N0_DB = (0.1, 10.0)
-SATURATION_STRESS_FRAMES_PER_SEED = 1000      # sanity check at the extremes
+SATURATION_STRESS_FRAMES_PER_SEED = 1000  # sanity check at the extremes
 
 
 def sweep_one_grid_point(
@@ -457,9 +461,7 @@ def sweep_one_grid_point(
     else:
         this_frames = frames_per_seed
     for seed in SEEDS:
-        ss = np.random.SeedSequence(
-            entropy=seed, spawn_key=(code_id, int(eb_n0_db * 1000))
-        )
+        ss = np.random.SeedSequence(entropy=seed, spawn_key=(code_id, int(eb_n0_db * 1000)))
         rng = np.random.default_rng(ss)
         for _ in range(this_frames):
             r = one_frame(proc, rng, code_id, sigma, sigma_sq, max_iters)
@@ -486,9 +488,7 @@ def sweep_code(
     meta = CODES[code_id]
     points = []
     for eb_n0_db in meta["grid_db"]:
-        pt = sweep_one_grid_point(
-            proc, code_id, eb_n0_db, frames_per_seed, max_iters
-        )
+        pt = sweep_one_grid_point(proc, code_id, eb_n0_db, frames_per_seed, max_iters)
         print(
             f"  [{meta['name']}] Eb/N0={eb_n0_db:>4.1f} dB  "
             f"FER={pt.fer:.6f} ± {pt.ci_fer:.6f}  "
@@ -511,7 +511,7 @@ _worker_proc: subprocess.Popen[bytes] | None = None
 
 def _worker_init(decoder_cmd: list[str]) -> None:
     """Called once per worker process. Spawns the adapter and handshakes."""
-    global _worker_proc
+    global _worker_proc  # noqa: PLW0603 — per-worker singleton, set once at init
     _worker_proc = subprocess.Popen(
         decoder_cmd,
         stdin=subprocess.PIPE,
@@ -526,9 +526,7 @@ def _worker_run_point(
     """Run one grid point against this worker's adapter."""
     code_id, eb_n0_db, frames_per_seed, max_iters = task
     assert _worker_proc is not None
-    pt = sweep_one_grid_point(
-        _worker_proc, code_id, eb_n0_db, frames_per_seed, max_iters
-    )
+    pt = sweep_one_grid_point(_worker_proc, code_id, eb_n0_db, frames_per_seed, max_iters)
     return code_id, eb_n0_db, pt
 
 
@@ -577,8 +575,7 @@ def parallel_sweep(
     if n_threads <= 0:
         n_threads = max(1, (os.cpu_count() or 1) - 1)
     print(
-        f"[harness] parallel sweep — {n_threads} worker(s), "
-        f"{len(tasks)} grid points",
+        f"[harness] parallel sweep — {n_threads} worker(s), {len(tasks)} grid points",
         file=sys.stderr,
     )
     with concurrent.futures.ProcessPoolExecutor(
@@ -586,15 +583,13 @@ def parallel_sweep(
         initializer=_worker_init,
         initargs=(decoder_cmd,),
     ) as pool:
-        completed = 0
-        for cid_out, eb_n0_out, pt in pool.map(_worker_run_point, tasks):
+        for i, (cid_out, eb_n0_out, pt) in enumerate(pool.map(_worker_run_point, tasks), start=1):
             sweep[cid_out][eb_n0_out] = pt
-            completed += 1
             print(
                 f"  [{CODES[cid_out]['name']}] Eb/N0={eb_n0_out:>4.1f} dB  "
                 f"FER={pt.fer:.6f} ± {pt.ci_fer:.6f}  "
                 f"(frames={pt.frames}, frame_errors={pt.frame_errors}) "
-                f"[{completed}/{len(tasks)}]",
+                f"[{i}/{len(tasks)}]",
                 file=sys.stderr,
             )
 
@@ -607,6 +602,7 @@ def parallel_sweep(
 
 
 # ─── Extended-tier: convergence CDF probe ────────────────────────────────
+
 
 @dataclass
 class ConvergencePoint:
@@ -673,6 +669,7 @@ def probe_convergence_cdf(
 
 # ─── Full-tier: error_floor probe (deep characterisation at high Eb/N0) ──
 
+
 def probe_error_floor(
     proc: subprocess.Popen[bytes],
     code_id: int,
@@ -730,6 +727,7 @@ def probe_error_floor(
 
 # ─── Full-tier: error_patterns probe (per-frame bit-error histograms) ────
 
+
 def probe_error_patterns(
     proc: subprocess.Popen[bytes],
     code_id: int,
@@ -741,8 +739,7 @@ def probe_error_patterns(
     whether errors cluster or spread."""
     meta = CODES[code_id]
     print(
-        f"[harness] error-pattern probe ({meta['name']} @ {eb_n0_list} dB, "
-        f"{frames} frames/point)…",
+        f"[harness] error-pattern probe ({meta['name']} @ {eb_n0_list} dB, {frames} frames/point)…",
         file=sys.stderr,
     )
     results: list[dict[str, Any]] = []
@@ -761,8 +758,7 @@ def probe_error_patterns(
             r = one_frame(proc, rng, code_id, sigma, sigma_sq, DEFAULT_MAX_ITERS)
             if r.bit_errors > 0:
                 per_frame_errs.append(r.bit_errors)
-                if r.bit_errors > max_errs:
-                    max_errs = r.bit_errors
+                max_errs = max(max_errs, r.bit_errors)
         # Histogram with the same bins lunalink uses.
         histogram = []
         for lo, hi in ERROR_PATTERN_HISTOGRAM_BINS:
@@ -773,15 +769,17 @@ def probe_error_patterns(
                 count = sum(1 for e in per_frame_errs if lo <= e <= hi)
                 label = f"{lo}-{hi}"
             histogram.append({"range": label, "count": count})
-        results.append({
-            "eb_n0_db": eb_n0_db,
-            "total_frames": frames,
-            "frame_errors": len(per_frame_errs),
-            "max_bit_errors": max_errs,
-            "k_nominal": meta["n_info_bits"],
-            "histogram": histogram,
-            "raw_errors": per_frame_errs,
-        })
+        results.append(
+            {
+                "eb_n0_db": eb_n0_db,
+                "total_frames": frames,
+                "frame_errors": len(per_frame_errs),
+                "max_bit_errors": max_errs,
+                "k_nominal": meta["n_info_bits"],
+                "histogram": histogram,
+                "raw_errors": per_frame_errs,
+            }
+        )
         print(
             f"  [{meta['name']}] Eb/N0={eb_n0_db} dB  "
             f"frame_errors={len(per_frame_errs)}/{frames}  "
@@ -792,6 +790,7 @@ def probe_error_patterns(
 
 
 # ─── Full-tier: saturation_stress probe (extreme-SNR sanity) ─────────────
+
 
 def probe_saturation_stress(
     proc: subprocess.Popen[bytes],
@@ -844,11 +843,10 @@ def probe_saturation_stress(
 
 # ─── Verdict computation per code ────────────────────────────────────────
 
+
 def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
     """Lowest grid point at Eb/N0 ≥ 0 where BER < 1e-5; else best in-band."""
-    in_band = [
-        p for p in points if p.eb_n0_db >= LDPC_OPERATING_POINT_EB_N0_DB
-    ]
+    in_band = [p for p in points if p.eb_n0_db >= LDPC_OPERATING_POINT_EB_N0_DB]
     passing = [p for p in in_band if p.ber < LDPC_VERDICT_BAR_BER]
     if passing:
         anchor = min(passing, key=lambda p: p.eb_n0_db)
@@ -884,6 +882,7 @@ def sb1_verdict(points: list[GridPoint]) -> dict[str, Any]:
 
 
 # ─── Algo card emission (unified schema) ─────────────────────────────────
+
 
 def waterfall_entry_ldpc(p: GridPoint) -> dict[str, Any]:
     return {
@@ -978,9 +977,7 @@ def build_algo_card(
             "decoder": decoder_meta.get("name", "unknown"),
             "algorithm": decoder_meta.get("algorithm", "unspecified"),
             "max_iterations": max_iters,
-            "early_termination": decoder_meta.get(
-                "early_termination", "unspecified"
-            ),
+            "early_termination": decoder_meta.get("early_termination", "unspecified"),
             "subframes": {},
         }
         if 1 in ldpc_codes:
@@ -989,7 +986,9 @@ def build_algo_card(
             )
         if 2 in ldpc_codes:
             card["ldpc"]["subframes"]["SF3_SF4"] = ldpc_subframe_block(
-                2, ldpc_codes[2], frames_per_seed,
+                2,
+                ldpc_codes[2],
+                frames_per_seed,
                 applies_to=["SF3", "SF4"],
             )
     # SB1 block (if BCH ran).
@@ -1009,8 +1008,7 @@ def build_algo_card(
                 "class": sb1_decoder_meta.get("class", "other"),
                 "algorithm": sb1_decoder_meta.get("algorithm", "unspecified"),
             },
-            "frame_error_definition":
-                "decoded FID != transmitted OR decoded TOI != transmitted",
+            "frame_error_definition": "decoded FID != transmitted OR decoded TOI != transmitted",
             "frames_per_seed_default": frames_per_seed,
             "eb_n0_grid_db": list(CODES[0]["grid_db"]),
             "waterfall": [waterfall_entry_sb1(p) for p in sb1_points],
@@ -1048,7 +1046,8 @@ def build_algo_card(
 
 # ─── CLI ─────────────────────────────────────────────────────────────────
 
-def run_harness(
+
+def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally cleanup
     *,
     decoder_cmd: list[str],
     code_ids: list[int],
@@ -1227,12 +1226,8 @@ EXPECTED_METHODOLOGY = {
     "ci_method": "wilson_95",
 }
 EXPECTED_OPERATING_ES_N0_DB = 0.0
-EXPECTED_LDPC_VERDICT_CRITERION = (
-    f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB"
-)
-EXPECTED_SB1_VERDICT_CRITERION = (
-    f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB"
-)
+EXPECTED_LDPC_VERDICT_CRITERION = f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB"
+EXPECTED_SB1_VERDICT_CRITERION = f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB"
 
 
 def _validate_waterfall_row(
@@ -1248,9 +1243,7 @@ def _validate_waterfall_row(
             errors.append(f"{path}: missing key '{k}'")
 
 
-def _validate_ldpc_subframe(
-    block: dict[str, Any], label: str, errors: list[str]
-) -> None:
+def _validate_ldpc_subframe(block: dict[str, Any], label: str, errors: list[str]) -> None:
     path = f"ldpc.subframes.{label}"
     for k in ("code", "frames_per_seed", "eb_n0_grid_db", "waterfall", "verdict"):
         if k not in block:
@@ -1259,13 +1252,12 @@ def _validate_ldpc_subframe(
         grid = block["eb_n0_grid_db"]
         if list(grid) != list(LDPC_GRID):
             errors.append(
-                f"{path}.eb_n0_grid_db: does not match pinned LDPC grid "
-                f"({list(LDPC_GRID)})"
+                f"{path}.eb_n0_grid_db: does not match pinned LDPC grid ({list(LDPC_GRID)})"
             )
     if "waterfall" in block:
         for i, row in enumerate(block["waterfall"]):
             _validate_waterfall_row(row, "ldpc", errors, f"{path}.waterfall[{i}]")
-    if "verdict" in block and block["verdict"]:
+    if block.get("verdict"):
         v = block["verdict"]
         if v.get("criterion") != EXPECTED_LDPC_VERDICT_CRITERION:
             errors.append(
@@ -1277,11 +1269,15 @@ def _validate_ldpc_subframe(
                 errors.append(f"{path}.verdict: missing key '{k}'")
 
 
-def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:
+def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:  # noqa: PLR0912
     path = "sb1"
     for k in (
-        "code", "decoder", "frame_error_definition",
-        "eb_n0_grid_db", "waterfall", "verdict",
+        "code",
+        "decoder",
+        "frame_error_definition",
+        "eb_n0_grid_db",
+        "waterfall",
+        "verdict",
     ):
         if k not in block:
             errors.append(f"{path}: missing key '{k}'")
@@ -1289,8 +1285,7 @@ def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:
         grid = block["eb_n0_grid_db"]
         if list(grid) != list(BCH_GRID):
             errors.append(
-                f"{path}.eb_n0_grid_db: does not match pinned BCH grid "
-                f"({list(BCH_GRID)})"
+                f"{path}.eb_n0_grid_db: does not match pinned BCH grid ({list(BCH_GRID)})"
             )
     if "decoder" in block:
         d = block["decoder"]
@@ -1299,13 +1294,12 @@ def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:
                 errors.append(f"{path}.decoder: missing key '{k}'")
         if "class" in d and d["class"] not in {"hard_ML", "soft_ML", "BDD", "other"}:
             errors.append(
-                f"{path}.decoder.class: '{d['class']}' is not in "
-                f"{{hard_ML, soft_ML, BDD, other}}"
+                f"{path}.decoder.class: '{d['class']}' is not in {{hard_ML, soft_ML, BDD, other}}"
             )
     if "waterfall" in block:
         for i, row in enumerate(block["waterfall"]):
             _validate_waterfall_row(row, "sb1", errors, f"{path}.waterfall[{i}]")
-    if "verdict" in block and block["verdict"]:
+    if block.get("verdict"):
         v = block["verdict"]
         if v.get("criterion") != EXPECTED_SB1_VERDICT_CRITERION:
             errors.append(
@@ -1317,22 +1311,26 @@ def _validate_sb1(block: dict[str, Any], errors: list[str]) -> None:
                 errors.append(f"{path}.verdict: missing key '{k}'")
 
 
-def validate_card(card: dict[str, Any]) -> list[str]:
+def validate_card(card: dict[str, Any]) -> list[str]:  # noqa: PLR0912
     """Returns a list of validation errors. Empty list means the card is valid."""
     errors: list[str] = []
 
     # Required top-level fields.
     for k in (
-        "schema_version", "tier", "produced_by", "produced_at",
-        "reference_anchor", "operating_point", "channel", "methodology",
+        "schema_version",
+        "tier",
+        "produced_by",
+        "produced_at",
+        "reference_anchor",
+        "operating_point",
+        "channel",
+        "methodology",
     ):
         if k not in card:
             errors.append(f"missing top-level key '{k}'")
 
     if "tier" in card and card["tier"] not in ("core", "extended", "full"):
-        errors.append(
-            f"tier: '{card['tier']}' not in {{core, extended, full}}"
-        )
+        errors.append(f"tier: '{card['tier']}' not in {{core, extended, full}}")
 
     if "operating_point" in card:
         op = card["operating_point"]
@@ -1345,9 +1343,7 @@ def validate_card(card: dict[str, Any]) -> list[str]:
     if "channel" in card:
         ch = card["channel"]
         if ch.get("model") != "BPSK-AWGN":
-            errors.append(
-                f"channel.model: expected 'BPSK-AWGN', got '{ch.get('model')}'"
-            )
+            errors.append(f"channel.model: expected 'BPSK-AWGN', got '{ch.get('model')}'")
         for k in ("sigma_formula", "llr_formula"):
             if k not in ch:
                 errors.append(f"channel: missing key '{k}'")
@@ -1356,9 +1352,7 @@ def validate_card(card: dict[str, Any]) -> list[str]:
         m = card["methodology"]
         for k, expected in EXPECTED_METHODOLOGY.items():
             if m.get(k) != expected:
-                errors.append(
-                    f"methodology.{k}: expected {expected!r}, got {m.get(k)!r}"
-                )
+                errors.append(f"methodology.{k}: expected {expected!r}, got {m.get(k)!r}")
 
     # At least one code block must be present.
     has_ldpc = "ldpc" in card and card["ldpc"]
@@ -1376,9 +1370,7 @@ def validate_card(card: dict[str, Any]) -> list[str]:
             for label, block in subs.items():
                 _validate_ldpc_subframe(block, label, errors)
             if "SF2" not in subs and "SF3_SF4" not in subs:
-                errors.append(
-                    "ldpc.subframes: at least one of SF2 or SF3_SF4 expected"
-                )
+                errors.append("ldpc.subframes: at least one of SF2 or SF3_SF4 expected")
 
     if has_sb1:
         _validate_sb1(card["sb1"], errors)
@@ -1407,6 +1399,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 # Statistical comparison between two algo cards on tier-core fields.
 # This is NOT diff (equality check) — perf cards from different teams are
 # expected to diverge; the question is "by how much, statistically?"
+
 
 def _ci_overlap(a_fer: float, a_ci: float, b_fer: float, b_ci: float) -> str:
     """Return 'A<' (A strictly better), 'B<' (B strictly better), or '=' (tied within CI)."""
@@ -1446,18 +1439,23 @@ def _compare_waterfall(
             b_better += 1
         else:
             tied += 1
-        rows.append({
-            "eb_n0_db": db,
-            "a_fer": ap["fer"], "a_ci": ap["ci_fer"],
-            "b_fer": bp["fer"], "b_ci": bp["ci_fer"],
-            "verdict": verdict,
-        })
+        rows.append(
+            {
+                "eb_n0_db": db,
+                "a_fer": ap["fer"],
+                "a_ci": ap["ci_fer"],
+                "b_fer": bp["fer"],
+                "b_ci": bp["ci_fer"],
+                "verdict": verdict,
+            }
+        )
 
     if verbose:
-        print(f"\n{label} waterfall (shared {len(shared)} of "
-              f"{len(a_by_db)}/{len(b_by_db)} grid points):")
-        print(f"  {'Eb/N0':>6}  {'A FER':>10}  {'± CI':>10}  "
-              f"{'B FER':>10}  {'± CI':>10}  verdict")
+        print(
+            f"\n{label} waterfall (shared {len(shared)} of "
+            f"{len(a_by_db)}/{len(b_by_db)} grid points):"
+        )
+        print(f"  {'Eb/N0':>6}  {'A FER':>10}  {'± CI':>10}  {'B FER':>10}  {'± CI':>10}  verdict")
         for r in rows:
             v = r["verdict"]
             mark = "A wins" if v == "A<" else "B wins" if v == "B<" else "tied"
@@ -1473,10 +1471,7 @@ def _compare_waterfall(
         "a_better": a_better,
         "b_better": b_better,
         "tied": tied,
-        "summary": (
-            f"A better at {a_better} points, B better at {b_better}, "
-            f"tied at {tied}"
-        ),
+        "summary": (f"A better at {a_better} points, B better at {b_better}, tied at {tied}"),
         "rows": rows,
     }
 
@@ -1508,9 +1503,7 @@ def _compare_verdict(
     }
 
 
-def compare_cards(
-    a: dict[str, Any], b: dict[str, Any], verbose: bool = False
-) -> dict[str, Any]:
+def compare_cards(a: dict[str, Any], b: dict[str, Any], verbose: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {
         "a_identity": {
             "produced_by": a.get("produced_by"),
@@ -1526,9 +1519,7 @@ def compare_cards(
             "sb1_decoder": b.get("sb1", {}).get("decoder", {}).get("name"),
             "sb1_class": b.get("sb1", {}).get("decoder", {}).get("class"),
         },
-        "anchor_match": (
-            a.get("reference_anchor") == b.get("reference_anchor")
-        ),
+        "anchor_match": (a.get("reference_anchor") == b.get("reference_anchor")),
         "waterfalls": [],
         "verdicts": [],
     }
@@ -1545,25 +1536,31 @@ def compare_cards(
                 verbose,
             )
             result["waterfalls"].append(wf)
-            result["verdicts"].append(_compare_verdict(
-                a_ldpc[sf].get("verdict"),
-                b_ldpc[sf].get("verdict"),
-                f"ldpc.{sf}",
-            ))
+            result["verdicts"].append(
+                _compare_verdict(
+                    a_ldpc[sf].get("verdict"),
+                    b_ldpc[sf].get("verdict"),
+                    f"ldpc.{sf}",
+                )
+            )
 
     # SB1 comparison.
     if "sb1" in a and "sb1" in b:
-        result["waterfalls"].append(_compare_waterfall(
-            a["sb1"].get("waterfall", []),
-            b["sb1"].get("waterfall", []),
-            "sb1",
-            verbose,
-        ))
-        result["verdicts"].append(_compare_verdict(
-            a["sb1"].get("verdict"),
-            b["sb1"].get("verdict"),
-            "sb1",
-        ))
+        result["waterfalls"].append(
+            _compare_waterfall(
+                a["sb1"].get("waterfall", []),
+                b["sb1"].get("waterfall", []),
+                "sb1",
+                verbose,
+            )
+        )
+        result["verdicts"].append(
+            _compare_verdict(
+                a["sb1"].get("verdict"),
+                b["sb1"].get("verdict"),
+                "sb1",
+            )
+        )
 
     return result
 
@@ -1586,14 +1583,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
     print(f"A: {args.card_a}")
     print(f"   produced_by:  {result['a_identity']['produced_by']}")
     print(f"   ldpc decoder: {result['a_identity']['ldpc_decoder']}")
-    print(f"   sb1 decoder:  {result['a_identity']['sb1_decoder']} "
-          f"({result['a_identity']['sb1_class']})")
+    print(
+        f"   sb1 decoder:  {result['a_identity']['sb1_decoder']} "
+        f"({result['a_identity']['sb1_class']})"
+    )
     print()
     print(f"B: {args.card_b}")
     print(f"   produced_by:  {result['b_identity']['produced_by']}")
     print(f"   ldpc decoder: {result['b_identity']['ldpc_decoder']}")
-    print(f"   sb1 decoder:  {result['b_identity']['sb1_decoder']} "
-          f"({result['b_identity']['sb1_class']})")
+    print(
+        f"   sb1 decoder:  {result['b_identity']['sb1_decoder']} "
+        f"({result['b_identity']['sb1_class']})"
+    )
     print()
     if not result["anchor_match"]:
         print("WARNING: cards reference different anchor — comparison may not be fair")
@@ -1675,14 +1676,9 @@ def cmd_self_test(args: argparse.Namespace) -> int:
     # Compare fresh vs shipped reference.
     result = compare_cards(fresh, ref_card, verbose=args.verbose)
 
-    drift_points = sum(
-        w.get("a_better", 0) + w.get("b_better", 0)
-        for w in result["waterfalls"]
-    )
+    drift_points = sum(w.get("a_better", 0) + w.get("b_better", 0) for w in result["waterfalls"])
     verdict_mismatch = any(
-        v.get("a_pass") is not None
-        and v.get("b_pass") is not None
-        and v["a_pass"] != v["b_pass"]
+        v.get("a_pass") is not None and v.get("b_pass") is not None and v["a_pass"] != v["b_pass"]
         for v in result["verdicts"]
     )
 
@@ -1718,6 +1714,7 @@ def cmd_self_test(args: argparse.Namespace) -> int:
 # ranked independently. Cards that pass the verdict are ranked above
 # cards that fail; within passes, lower achievement Eb/N0 (LDPC) or
 # lower FER (SB1) is better. Statistical ties are grouped via CI overlap.
+
 
 def _card_label(path: Path, card: dict[str, Any]) -> str:
     """Display label: filename stem + decoder identity hint."""
@@ -1761,9 +1758,7 @@ def _ldpc_subframe_entry(
     }
 
 
-def _sb1_entry(
-    label: str, path: Path, card: dict[str, Any]
-) -> dict[str, Any] | None:
+def _sb1_entry(label: str, path: Path, card: dict[str, Any]) -> dict[str, Any] | None:
     sb1 = card.get("sb1")
     if not sb1:
         return None
@@ -1826,9 +1821,12 @@ def _rank_with_ties(
         same_bucket = abs(e[sort_key] - prev[sort_key]) < 1e-9
         overlap = (
             _ci_overlap(
-                e[secondary_key], e.get("ci_fer", 0.0),
-                prev[secondary_key], prev.get("ci_fer", 0.0),
-            ) == "="
+                e[secondary_key],
+                e.get("ci_fer", 0.0),
+                prev[secondary_key],
+                prev.get("ci_fer", 0.0),
+            )
+            == "="
         )
         if same_bucket and overlap:
             e["rank"] = prev["rank"]
@@ -1846,8 +1844,7 @@ def _rank_with_ties(
 def _render_ldpc_table(title: str, entries: list[dict[str, Any]]) -> None:
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}"
-          f"{'at Eb/N0':>9}  {'FER':>10}  {'± CI':>10}")
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}{'at Eb/N0':>9}  {'FER':>10}  {'± CI':>10}")
     print("  " + "─" * 110)
     for e in entries:
         if e["pass"]:
@@ -1871,8 +1868,7 @@ def _render_sb1_table(entries: list[dict[str, Any]]) -> None:
     title = "SB1 — verdict: FER < 0.01 at Es/N0 >= 0 dB"
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}"
-          f"{'FER':>10}  {'± CI':>10}")
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}{'FER':>10}  {'± CI':>10}")
     print("  " + "─" * 100)
     for e in entries:
         if e["pass"]:
@@ -1884,11 +1880,7 @@ def _render_sb1_table(entries: list[dict[str, Any]]) -> None:
                 f"{e['fer']:>10.6f}  {e['ci_fer']:>10.6f}"
             )
         else:
-            print(
-                f"  {'FAIL':<6}"
-                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
-                f"{e['fer']:>10.6f}"
-            )
+            print(f"  {'FAIL':<6}{e['label'][:30]:<32}{e['decoder'][:38]:<40}{e['fer']:>10.6f}")
     print()
 
 
@@ -1902,10 +1894,7 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
             return 2
 
     # Anchor consistency check.
-    anchors = {
-        json.dumps(c.get("reference_anchor", {}), sort_keys=True)
-        for _, c in cards
-    }
+    anchors = {json.dumps(c.get("reference_anchor", {}), sort_keys=True) for _, c in cards}
     if len(anchors) > 1:
         print(
             "WARNING: cards reference different anchors — ranking may not be fair.",
@@ -1954,13 +1943,9 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
     # Human-readable.
     print(f"\nLeaderboard — {len(cards)} card(s)\n")
     if sf2:
-        _render_ldpc_table(
-            "LDPC SF2 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf2
-        )
+        _render_ldpc_table("LDPC SF2 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf2)
     if sf3:
-        _render_ldpc_table(
-            "LDPC SF3/SF4 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf3
-        )
+        _render_ldpc_table("LDPC SF3/SF4 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf3)
     if sb1:
         _render_sb1_table(sb1)
     return 0
@@ -1969,34 +1954,36 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="perf_card",
-        description=(
-            "LSIS-AFS Decoder Performance Card harness — run / validate / compare."
-        ),
+        description=("LSIS-AFS Decoder Performance Card harness — run / validate / compare."),
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     rp = sub.add_parser(
         "run",
-        help=(
-            "Sweep an adapter over the full pinned Eb/N0 grid per code and "
-            "emit an algo card."
-        ),
+        help=("Sweep an adapter over the full pinned Eb/N0 grid per code and emit an algo card."),
     )
     rp.add_argument("--decoder", required=True, help="Adapter executable.")
     rp.add_argument(
-        "--codes", default="SB1,SF2,SF3",
+        "--codes",
+        default="SB1,SF2,SF3",
         help="Comma-separated list of codes to characterise (default: all).",
     )
     rp.add_argument(
-        "--frames-per-seed", type=int, default=DEFAULT_FRAMES_PER_SEED,
+        "--frames-per-seed",
+        type=int,
+        default=DEFAULT_FRAMES_PER_SEED,
         help="Frames per seed per grid point (default: 5000).",
     )
     rp.add_argument(
-        "--max-iters", type=int, default=DEFAULT_MAX_ITERS,
+        "--max-iters",
+        type=int,
+        default=DEFAULT_MAX_ITERS,
         help="max_iters passed to the adapter (default: 50).",
     )
     rp.add_argument(
-        "--tier", default="core", choices=["core", "extended", "full"],
+        "--tier",
+        default="core",
+        choices=["core", "extended", "full"],
         help=(
             "Tier of probes to run (default: core). 'extended' adds an "
             "LDPC convergence-CDF probe (max_iters sweep) on SF2 at 1.5 dB."
@@ -2004,7 +1991,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _default_workers = max(1, (os.cpu_count() or 1) - 1)
     rp.add_argument(
-        "--workers", type=int, default=_default_workers,
+        "--workers",
+        type=int,
+        default=_default_workers,
         help=(
             f"Number of parallel adapter subprocesses to run the grid "
             f"sweep across (default: {_default_workers} = cpu_count - 1). "
@@ -2043,11 +2032,13 @@ def build_parser() -> argparse.ArgumentParser:
     cp.add_argument("card_a", help="First algo card JSON.")
     cp.add_argument("card_b", help="Second algo card JSON.")
     cp.add_argument(
-        "--verbose", action="store_true",
+        "--verbose",
+        action="store_true",
         help="Print full per-grid-point waterfall table.",
     )
     cp.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Emit machine-readable JSON instead of human summary.",
     )
     cp.set_defaults(func=cmd_compare)
@@ -2064,19 +2055,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     stp.add_argument(
-        "--decoder", required=True,
+        "--decoder",
+        required=True,
         help="Adapter executable (shell-quoted; can include args).",
     )
     stp.add_argument(
-        "--codes", default="SB1,SF2,SF3",
+        "--codes",
+        default="SB1,SF2,SF3",
         help="Codes to run during self-test (default: all).",
     )
     stp.add_argument(
-        "--frames-per-seed", type=int, default=SELF_TEST_FRAMES_PER_SEED,
-        help=f"Frames per seed (default: {SELF_TEST_FRAMES_PER_SEED} — faster than `run`'s default).",
+        "--frames-per-seed",
+        type=int,
+        default=SELF_TEST_FRAMES_PER_SEED,
+        help=(
+            f"Frames per seed (default: {SELF_TEST_FRAMES_PER_SEED} — faster than `run`'s default)."
+        ),
     )
     stp.add_argument(
-        "--verbose", action="store_true",
+        "--verbose",
+        action="store_true",
         help="Print the per-grid-point CI-overlap table.",
     )
     stp.set_defaults(func=cmd_self_test)
@@ -2092,11 +2090,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     lbp.add_argument(
-        "cards", nargs="+",
+        "cards",
+        nargs="+",
         help="Two or more algo card JSON files to rank.",
     )
     lbp.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Emit machine-readable JSON instead of human-readable table.",
     )
     lbp.set_defaults(func=cmd_leaderboard)

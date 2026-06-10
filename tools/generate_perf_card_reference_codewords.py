@@ -37,10 +37,9 @@ from lunalink.afs import (  # type: ignore[import-not-found]
     ldpc_encode,
 )
 
-
 # Pool sizes. Generation is fast (encoders are C++), so generous pools
 # are cheap. Shipped file size is dominated by the packed-bit payload.
-N_BCH_PAIRS  = 100      # ~26% of the 400-entry valid codebook
+N_BCH_PAIRS = 100  # ~26% of the 400-entry valid codebook
 N_LDPC_PAIRS = 1000
 
 # Deterministic seed for generation — anyone regenerating the pool with
@@ -88,14 +87,10 @@ def main() -> int:
     sb1_info, sb1_cw = generate_bch_pairs(rng, N_BCH_PAIRS)
 
     print(f"Generating SF2 ({N_LDPC_PAIRS} pairs)...", flush=True)
-    sf2_info, sf2_cw = generate_ldpc_pairs(
-        rng, N_LDPC_PAIRS, LdpcSubframe.SF2, 1200, 2400
-    )
+    sf2_info, sf2_cw = generate_ldpc_pairs(rng, N_LDPC_PAIRS, LdpcSubframe.SF2, 1200, 2400)
 
     print(f"Generating SF3 ({N_LDPC_PAIRS} pairs)...", flush=True)
-    sf3_info, sf3_cw = generate_ldpc_pairs(
-        rng, N_LDPC_PAIRS, LdpcSubframe.SF3, 870, 1740
-    )
+    sf3_info, sf3_cw = generate_ldpc_pairs(rng, N_LDPC_PAIRS, LdpcSubframe.SF3, 870, 1740)
 
     # Bit-pack for compact storage.
     print(f"Bit-packing and writing {OUT_PATH.name}...", flush=True)

@@ -31,7 +31,6 @@ import struct
 import sys
 
 import numpy as np
-
 from lunalink.afs import (  # type: ignore[import-not-found]
     BchStatus,
     LdpcStatus,
@@ -40,14 +39,13 @@ from lunalink.afs import (  # type: ignore[import-not-found]
     ldpc_decode,
 )
 
-
 # Wire protocol formats — must match perf_card.py.
-REQUEST_HEADER_FMT  = "<BHfI"
-REQUEST_HEADER_LEN  = 11
+REQUEST_HEADER_FMT = "<BHfI"
+REQUEST_HEADER_LEN = 11
 RESPONSE_HEADER_FMT = "<BHI"
-PROTOCOL_VERSION    = "1.0"
+PROTOCOL_VERSION = "1.0"
 
-N_INFO    = {0: 9, 1: 1200, 2: 870}
+N_INFO = {0: 9, 1: 1200, 2: 870}
 LDPC_TYPE = {1: LdpcSubframe.SF2, 2: LdpcSubframe.SF3}
 
 
@@ -63,24 +61,26 @@ def pack_sb1_info(fid_val: int, toi_val: int) -> np.ndarray:
 def do_handshake(stdin, stdout) -> None:
     n = struct.unpack("<I", stdin.read(4))[0]
     _ = json.loads(stdin.read(n))
-    resp = json.dumps({
-        "type": "handshake_ack",
-        "protocol_version": PROTOCOL_VERSION,
-        "adapter": {
-            "name": "lunalink ldpc_decode (sum-product, float64)",
-            "version": "1.0.0",
-            "supports_codes": ["SB1", "SF2", "SF3"],
-            "ldpc": {
-                "algorithm": "Layered Sum-Product BP (phi-transform)",
-                "early_termination": "syndrome check every iteration",
+    resp = json.dumps(
+        {
+            "type": "handshake_ack",
+            "protocol_version": PROTOCOL_VERSION,
+            "adapter": {
+                "name": "lunalink ldpc_decode (sum-product, float64)",
+                "version": "1.0.0",
+                "supports_codes": ["SB1", "SF2", "SF3"],
+                "ldpc": {
+                    "algorithm": "Layered Sum-Product BP (phi-transform)",
+                    "early_termination": "syndrome check every iteration",
+                },
+                "sb1": {
+                    "name": "lunalink bch_decode_soft",
+                    "decoder_class": "soft_ML",
+                    "algorithm": "exhaustive ML over inner-product LLR",
+                },
             },
-            "sb1": {
-                "name": "lunalink bch_decode_soft",
-                "decoder_class": "soft_ML",
-                "algorithm": "exhaustive ML over inner-product LLR",
-            },
-        },
-    }).encode("utf-8")
+        }
+    ).encode("utf-8")
     stdout.write(struct.pack("<I", len(resp)))
     stdout.write(resp)
     stdout.flush()
@@ -93,13 +93,9 @@ def decode_sb1(llrs: np.ndarray) -> tuple[np.ndarray, int, int]:
     return info, status, 0
 
 
-def decode_ldpc(
-    code_id: int, llrs: np.ndarray, max_iters: int
-) -> tuple[np.ndarray, int, int]:
+def decode_ldpc(code_id: int, llrs: np.ndarray, max_iters: int) -> tuple[np.ndarray, int, int]:
     subframe = LDPC_TYPE[code_id]
-    decoded, status_enum = ldpc_decode(
-        subframe, llrs.astype(np.float32), int(max_iters)
-    )
+    decoded, status_enum = ldpc_decode(subframe, llrs.astype(np.float32), int(max_iters))
     if status_enum == LdpcStatus.OK:
         status = 0
     elif status_enum == LdpcStatus.NOT_CONVERGED:
@@ -118,9 +114,7 @@ def main() -> int:
         hdr = stdin.read(REQUEST_HEADER_LEN)
         if not hdr:
             return 0
-        code_id, max_iters, _sigma_sq, n_bits = struct.unpack(
-            REQUEST_HEADER_FMT, hdr
-        )
+        code_id, max_iters, _sigma_sq, n_bits = struct.unpack(REQUEST_HEADER_FMT, hdr)
         llrs = np.frombuffer(stdin.read(4 * n_bits), dtype=np.float32)
 
         if code_id == 0:
