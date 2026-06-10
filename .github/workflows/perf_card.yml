@@ -1,0 +1,117 @@
+name: perf-card
+
+# Smoke-tests the perf-card harness end-to-end without requiring any
+# external decoder (lunalink, etc.). Uses the mock adapter and the
+# shipped Python + C templates — proves the harness produces conformant
+# cards through every code path it owns. Catches regressions in:
+#
+#   - Schema (validate against the shipped reference card)
+#   - Adapter contract (handshake + binary protocol)
+#   - C template compilation and protocol parity with Python
+#   - Parallel worker spawning + multiprocessing pool plumbing
+#   - compare / leaderboard subcommands
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  perf-card-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync project
+        run: uv sync --locked
+
+      # ── Schema check on the shipped reference card ────────────────────
+      - name: validate — shipped reference card
+        run: uv run perf-card validate perf_card_reference_card.json
+
+      # ── Build the C adapter template ──────────────────────────────────
+      # -Wno-unused-function: pack_sb1_info is intentionally provided as a
+      # helper for implementers; warning suppressed so unmodified template
+      # builds with -Werror in CI.
+      - name: build — C adapter template
+        run: |
+          cc -O2 -std=c11 -Wall -Werror -Wno-unused-function \
+             -o /tmp/c_template perf_card_templates/adapter_c_template.c
+
+      # ── Python template smoke (single worker, SB1 only) ───────────────
+      - name: run — Python template against harness
+        run: |
+          uv run perf-card run \
+            --decoder "python perf_card_templates/adapter_py_template.py" \
+            --codes SB1 \
+            --frames-per-seed 10 \
+            --workers 1 \
+            --out /tmp/py_template_card.json
+
+      - name: validate — Python-template card
+        run: uv run perf-card validate /tmp/py_template_card.json
+
+      # ── C template smoke (single worker) ──────────────────────────────
+      - name: run — C template against harness
+        run: |
+          uv run perf-card run \
+            --decoder /tmp/c_template \
+            --codes SB1 \
+            --frames-per-seed 10 \
+            --workers 1 \
+            --out /tmp/c_template_card.json
+
+      - name: validate — C-template card
+        run: uv run perf-card validate /tmp/c_template_card.json
+
+      # ── Mock adapter smoke (parallel workers, full code set) ──────────
+      - name: run — mock adapter, parallel workers, all codes
+        run: |
+          uv run perf-card run \
+            --decoder "python perf_card_mock_adapter.py" \
+            --frames-per-seed 10 \
+            --workers 2 \
+            --out /tmp/mock_card.json
+
+      - name: validate — mock-adapter card
+        run: uv run perf-card validate /tmp/mock_card.json
+
+      # ── Cross-language consistency check ──────────────────────────────
+      # Both templates return all-zero info bits for every request →
+      # paired with the same seeded harness, they MUST produce identical
+      # FER numbers at every grid point. If this fails, the Python and
+      # C protocol implementations have drifted.
+      - name: compare — Python vs C templates (FER parity expected)
+        run: |
+          uv run perf-card compare \
+            /tmp/py_template_card.json /tmp/c_template_card.json \
+            --json > /tmp/py_vs_c_compare.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/py_vs_c_compare.json'))
+          drift = 0
+          for w in d['waterfalls']:
+              drift += w.get('a_better', 0) + w.get('b_better', 0)
+          if drift > 0:
+              raise SystemExit(
+                  f"Python and C templates diverged on {drift} grid point(s) — "
+                  f"this should be impossible (both decode to all-zero). "
+                  f"Cross-language protocol drift?"
+              )
+          print(f"OK — templates byte-identical across {sum(w['shared_points'] for w in d['waterfalls'])} grid points.")
+          PY
+
+      # ── Leaderboard smoke ─────────────────────────────────────────────
+      - name: leaderboard — N-way rank check
+        run: |
+          uv run perf-card leaderboard \
+            /tmp/py_template_card.json \
+            /tmp/c_template_card.json \
+            /tmp/mock_card.json \
+            perf_card_reference_card.json
