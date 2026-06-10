@@ -1,13 +1,47 @@
-# LSIS-AFS Decoding Round-Robin — Proposed Protocol
+# LSIS-AFS Interoperability Round-Robin — Proposed Protocol
 
-> **Status: PROPOSAL.** This document outlines a concrete, runnable proposal 
-> on how to run the Level 4 cross-decoding exercise as described in 
-> [`references/interoperability.pdf`](references/interoperability.pdf) 
-> that could be used during the Goonhilly June workshop. 
-> It also provides the tooling to automate the comparison and a set of 
-> standardised input vectors.
+> **Status: PROPOSAL.** A concrete, runnable proposal for the cross-team
+> round-robin described in
+> [`references/interoperability.pdf`](references/interoperability.pdf), for the
+> Goonhilly June workshop. The round-robin works at **every level** (spreading
+> codes → frames → signals → decode → parsed nav data), not only Level 4 —
+> **start where you are**: agreement with another team at *any* level is
+> meaningful spec-compliance evidence. This repo ships a `diff-*` comparison
+> tool and a standardised reference set for each level; the detailed worked
+> example below is Level 4 (the plan's named exercise).
 
-## What this is
+## Round-robin at every level
+
+The matrix below is a Level-4 instance, but the **same shape works at every
+level** — and you don't need a full receiver to take part. Pick the highest
+level your implementation reaches; agreement with another team at *any* level
+is meaningful evidence of specification compliance.
+
+| Gateway / Level | Exchange artefact | Compare with | Shipped reference |
+|---|---|---|---|
+| **L1** spreading codes | your `codes_prn*.hex` | `validate.py diff <dir>` | `codes/` (byte-equal vs Annex 3) |
+| **L2** encoded frames | your `frame_*.bin` | `validate.py diff-frames <dir>` | `frames/` |
+| **L2** pre-encode inputs | your `frame_*_input.bin` | `validate.py diff-inputs <dir>` | `inputs/` |
+| **L2** FEC components (BCH/CRC/LDPC/interleaver) | your `fec/*.json` | `validate.py diff-fec <dir>` | `fec/` |
+| **L3** baseband signals | your `signal_*.iq[.gz]` | `validate.py diff-signals <dir>` | `signals/` |
+| **L4** decoded data | your `decoded_fec_*.bin` | `validate.py diff-decode <dir>` | `inputs/` (original data) |
+| **L5** parsed nav data | your `parsed_*.json` | `validate.py diff-parsed <dir>` | `parsed/` |
+
+Every row works the same way: produce your artefacts in a directory, run the
+matching `diff-*` tool against the shipped reference (or `--reference DIR` for a
+group-agreed alternate set). Each tool reports per-vector pass/fail with
+first-mismatch detail and exits **0** (pass) / **1** (fail) / **2** (usage).
+`diff-parsed` compares the spec-shaped fields (`version`, `frame_id`,
+`time_of_transmission`, per-subframe `fid/toi/wn/itow/type`) and ignores
+implementation-specific underscore-prefixed metadata, so a team emitting only
+the spec fields still matches.
+
+The detailed contract below (file layout, `--json` matrix cell, pass semantics)
+is written for **Level 4** — the interop plan's named exercise — but the
+directory-in → `diff-*` → shared-reference pattern is identical at the other
+levels.
+
+## Level 4 — Decoding: the worked example
 
 The interop plan's **Level 4 — Decoding Interoperability** is a round-robin
 matrix: every team's signals are decoded by every team's decoder and the
@@ -41,9 +75,8 @@ decoder*.
 
 **Proposed standard reference set.** Rather than have each team re-derive
 the standardized messages and hope the bytes agree, this protocol proposes
-**this repository's `inputs/` (and `frames/`), pinned to an agreed
-release tag (TBD before the workshop), as the single agreed reference
-everyone diffs against.** These
+**this repository's `inputs/` (and `frames/`), pinned to release tag
+`v0.6.0`, as the single agreed reference everyone diffs against.** These
 are not ad-hoc: `inputs/` is the canonical pre-encode data, unchanged since
 v0.2.1, cross-checked by the L2 structural oracle and LANS-AFS-SIM, and
 round-tripped byte-exact by an independent receiver (PocketSDR-AFS) at L4.
@@ -83,8 +116,7 @@ For each input signal, write into one directory:
 
 ### Reference: the expected bytes
 
-The proposed standard reference is **this repository at an agreed pinned
-tag (TBD before the workshop)**:
+The proposed standard reference is **this repository at tag `v0.6.0`**:
 
 - `inputs/frame_<id>_input.bin` — 2868 bytes, the canonical pre-encode data
   the post-FEC output must equal. **This is the round-robin's source of
@@ -149,7 +181,7 @@ one `--json` invocation per (signal-set, their-decoder) pair and the cells
 are collected — e.g. `matrix[signal_owner][decoder_team] = summary.verdict`,
 with `signals[]` giving per-vector and first-mismatch detail for triage.
 
-## Pass definition and honesty
+## Pass definition
 
 A green cell means: **every post-FEC output equals the original input
 exactly, on every signal attempted, and no provided channel dump is wrong.**

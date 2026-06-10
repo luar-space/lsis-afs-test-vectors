@@ -49,5 +49,11 @@ jobs:
       - name: check-decode (L4 cross-decode round-trip)
         run: uv run lsis-afs-validate check-decode
 
+      - name: check-parsed (L5 parsed-JSON structural + ground-truth oracle)
+        run: uv run lsis-afs-validate check-parsed
+
+      - name: check-fec (Phase-3 FEC component oracle)
+        run: uv run lsis-afs-validate check-fec
+
       - name: verify-manifest
         run: uv run lsis-afs-validate verify-manifest
