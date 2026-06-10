@@ -38,30 +38,24 @@ wheels = [
 
 [[package]]
 name = "lsis-afs-test-vectors"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
-
-[package.optional-dependencies]
-fast = [
+dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "numpy", marker = "extra == 'fast'", specifier = ">=1.20" }]
-provides-extras = ["fast"]
+requires-dist = [{ name = "numpy", specifier = ">=1.20" }]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "numpy", specifier = ">=1.20" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
 ]
