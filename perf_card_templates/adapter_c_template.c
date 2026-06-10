@@ -160,9 +160,12 @@ int main(void) {
         uint16_t max_iters;
         float    sigma_sq;
         uint32_t n_bits;
-        fread(&max_iters, 2, 1, stdin);
-        fread(&sigma_sq,  4, 1, stdin);
-        fread(&n_bits,    4, 1, stdin);
+        if (fread(&max_iters, 2, 1, stdin) != 1 ||
+            fread(&sigma_sq,  4, 1, stdin) != 1 ||
+            fread(&n_bits,    4, 1, stdin) != 1) {
+            fprintf(stderr, "[adapter] short request header\n");
+            return 1;
+        }
         (void)sigma_sq;
 
         float *llrs = (float *)malloc((size_t)n_bits * sizeof(float));
