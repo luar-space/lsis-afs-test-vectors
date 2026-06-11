@@ -2136,35 +2136,47 @@ def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
     if v.get("pass") and cliff is not None and spec is not None:
         if spec > cliff:
             ax.axvspan(
-                cliff, spec, color=RENDER_PALETTE["verdict_pass"], alpha=0.10,
+                cliff,
+                spec,
+                color=RENDER_PALETTE["verdict_pass"],
+                alpha=0.10,
             )
         # Cliff: prominent — the implementation's actual achievement.
         ax.axvline(
-            cliff, color=RENDER_PALETTE["verdict_pass"],
-            linewidth=2.0, alpha=0.75,
+            cliff,
+            color=RENDER_PALETTE["verdict_pass"],
+            linewidth=2.0,
+            alpha=0.75,
         )
         ax.annotate(
             f"cliff\n{cliff:.1f} dB",
             xy=(cliff, 1.0),
             xytext=(cliff - 0.05, 0.6),
-            fontsize=9, fontweight="bold",
+            fontsize=9,
+            fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="right", va="top",
+            ha="right",
+            va="top",
         )
         # Spec: subtle dashed — the bar's evaluation point. Annotation
         # placed in the MIDDLE of the panel (below the cliff annotation
         # which sits at the top) so they don't horizontally crowd.
         ax.axvline(
-            spec, color=RENDER_PALETTE["text_dim"],
-            linewidth=1.2, alpha=0.65, linestyle="--",
+            spec,
+            color=RENDER_PALETTE["text_dim"],
+            linewidth=1.2,
+            alpha=0.65,
+            linestyle="--",
         )
         ax.annotate(
             f"spec {spec:.1f} dB",
             xy=(spec, 1e-2),
             xytext=(spec + 0.05, 1e-3),
-            fontsize=9, fontweight="bold",
+            fontsize=9,
+            fontweight="bold",
             color=RENDER_PALETTE["text_dim"],
-            ha="left", va="center",
+            ha="left",
+            va="center",
         )
 
     code = sub.get("code", {})
@@ -2221,23 +2233,33 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
     if v.get("pass") and cliff is not None and spec is not None:
         if spec > cliff:
             ax.axvspan(
-                cliff, spec, color=RENDER_PALETTE["verdict_pass"], alpha=0.10,
+                cliff,
+                spec,
+                color=RENDER_PALETTE["verdict_pass"],
+                alpha=0.10,
             )
         ax.axvline(
-            cliff, color=RENDER_PALETTE["verdict_pass"],
-            linewidth=2.0, alpha=0.75,
+            cliff,
+            color=RENDER_PALETTE["verdict_pass"],
+            linewidth=2.0,
+            alpha=0.75,
         )
         ax.annotate(
             f"cliff\n{cliff:.1f} dB",
             xy=(cliff, 1.0),
             xytext=(cliff - 0.1, 0.6),
-            fontsize=9, fontweight="bold",
+            fontsize=9,
+            fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="right", va="top",
+            ha="right",
+            va="top",
         )
         ax.axvline(
-            spec, color=RENDER_PALETTE["text_dim"],
-            linewidth=1.0, alpha=0.55, linestyle="--",
+            spec,
+            color=RENDER_PALETTE["text_dim"],
+            linewidth=1.0,
+            alpha=0.55,
+            linestyle="--",
         )
         ax.annotate(
             f"spec\n{spec:.1f} dB",
@@ -2245,7 +2267,8 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
             xytext=(spec + 0.1, 0.6),
             fontsize=8,
             color=RENDER_PALETTE["text_dim"],
-            ha="left", va="top",
+            ha="left",
+            va="top",
         )
 
     decoder = sb1.get("decoder", {})
