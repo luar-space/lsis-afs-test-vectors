@@ -2126,23 +2126,45 @@ def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
         ha="left",
     )
 
-    # Verdict achievement: shade region from achievement Eb/N0 to right
-    # edge instead of drawing a tall vertical bar over the curves.
+    # Two distinct verticals: the cliff (where the decoder first meets the
+    # bar) and the spec point (where the spec evaluates). The gap between
+    # them is the decoder's headroom — load-bearing for cross-team
+    # comparison. Cliff gets the prominent green styling; spec is subtle.
     v = sub.get("verdict") or {}
-    if v.get("pass"):
-        x_pass = v["at_eb_n0_db"]
-        ax.axvspan(x_pass, ebs[-1], color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
-        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"], linewidth=1.5, alpha=0.6)
-        # Achievement annotation at the top of the panel, well clear of curves.
+    cliff = v.get("first_bar_crossing_eb_n0_db")
+    spec = v.get("at_eb_n0_db")
+    if v.get("pass") and cliff is not None and spec is not None:
+        if spec > cliff:
+            ax.axvspan(
+                cliff, spec, color=RENDER_PALETTE["verdict_pass"], alpha=0.10,
+            )
+        # Cliff: prominent — the implementation's actual achievement.
+        ax.axvline(
+            cliff, color=RENDER_PALETTE["verdict_pass"],
+            linewidth=2.0, alpha=0.75,
+        )
         ax.annotate(
-            f"PASS\n@ {x_pass:.1f} dB",
-            xy=(x_pass, 1.0),
-            xytext=(x_pass + 0.05, 0.7),
-            fontsize=9,
-            fontweight="bold",
+            f"cliff\n{cliff:.1f} dB",
+            xy=(cliff, 1.0),
+            xytext=(cliff - 0.05, 0.6),
+            fontsize=9, fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="left",
-            va="top",
+            ha="right", va="top",
+        )
+        # Spec: subtle dashed — the bar's evaluation point. Annotation
+        # placed in the MIDDLE of the panel (below the cliff annotation
+        # which sits at the top) so they don't horizontally crowd.
+        ax.axvline(
+            spec, color=RENDER_PALETTE["text_dim"],
+            linewidth=1.2, alpha=0.65, linestyle="--",
+        )
+        ax.annotate(
+            f"spec {spec:.1f} dB",
+            xy=(spec, 1e-2),
+            xytext=(spec + 0.05, 1e-3),
+            fontsize=9, fontweight="bold",
+            color=RENDER_PALETTE["text_dim"],
+            ha="left", va="center",
         )
 
     code = sub.get("code", {})
@@ -2190,20 +2212,40 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
         ha="left",
     )
 
+    # Cliff + spec verticals — same pattern as LDPC. For BCH soft-ML
+    # the gap is dramatic (3.0 dB → 7.6 dB), so the margin region
+    # paints a clear picture of headroom.
     v = sb1.get("verdict") or {}
-    if v.get("pass"):
-        x_pass = v["at_eb_n0_db"]
-        ax.axvspan(x_pass, ebs[-1], color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
-        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"], linewidth=1.5, alpha=0.6)
+    cliff = v.get("first_bar_crossing_eb_n0_db")
+    spec = v.get("at_eb_n0_db")
+    if v.get("pass") and cliff is not None and spec is not None:
+        if spec > cliff:
+            ax.axvspan(
+                cliff, spec, color=RENDER_PALETTE["verdict_pass"], alpha=0.10,
+            )
+        ax.axvline(
+            cliff, color=RENDER_PALETTE["verdict_pass"],
+            linewidth=2.0, alpha=0.75,
+        )
         ax.annotate(
-            f"PASS @ {x_pass:.1f} dB",
-            xy=(x_pass, 1.0),
-            xytext=(x_pass - 0.2, 0.5),
-            fontsize=10,
-            fontweight="bold",
+            f"cliff\n{cliff:.1f} dB",
+            xy=(cliff, 1.0),
+            xytext=(cliff - 0.1, 0.6),
+            fontsize=9, fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="right",
-            va="center",
+            ha="right", va="top",
+        )
+        ax.axvline(
+            spec, color=RENDER_PALETTE["text_dim"],
+            linewidth=1.0, alpha=0.55, linestyle="--",
+        )
+        ax.annotate(
+            f"spec\n{spec:.1f} dB",
+            xy=(spec, 1.0),
+            xytext=(spec + 0.1, 0.6),
+            fontsize=8,
+            color=RENDER_PALETTE["text_dim"],
+            ha="left", va="top",
         )
 
     decoder = sb1.get("decoder", {})
