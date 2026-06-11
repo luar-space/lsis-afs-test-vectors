@@ -236,16 +236,43 @@ def generate_and_encode(code_id: int, rng: np.random.Generator) -> tuple[np.ndar
     return pool.pair(code_id, idx)
 
 
-# ─── Wilson 95% CI half-width ────────────────────────────────────────────
+# ─── Wilson 95% CI: symmetric half-width + one-sided upper bound ─────────
 
 
 def wilson_ci_hw(errors: int, trials: int, z: float = 1.96) -> float:
+    """Symmetric Wilson half-width around the empirical proportion.
+
+    NOTE: at `errors == 0` this is **half** the true one-sided Wilson
+    upper bound (it's the symmetric ± around p=0, which is asymmetric).
+    Use `wilson_upper` when you need the actual upper bound for a
+    "CI upper < bar" verdict claim. This function is the right thing
+    to use for ± error bars on a point estimate.
+    """
     if trials == 0:
         return 0.0
     n = float(trials)
     p = errors / n
     denom = 1.0 + z * z / n
     return z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n) / denom
+
+
+def wilson_upper(errors: int, trials: int, z: float = 1.96) -> float:
+    """One-sided Wilson 95% upper bound on a binomial proportion.
+
+    At `errors == 0` this is `z² / (trials + z²)` — the well-known
+    rule-of-three-style bound, NOT the symmetric half-width
+    (which is half that). Use this for verdict-side "CI upper ≤ bar"
+    reasoning where the harness must make a conservative claim that
+    the true rate is below a spec bar.
+    """
+    if trials == 0:
+        return 1.0
+    n = float(trials)
+    p = errors / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2.0 * n)) / denom
+    half = z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n) / denom
+    return centre + half
 
 
 # ─── Channel: σ from Eb/N0 ───────────────────────────────────────────────
@@ -422,6 +449,18 @@ class GridPoint:
     @property
     def ci_fer(self) -> float:
         return wilson_ci_hw(self.frame_errors, self.frames)
+
+    @property
+    def ci_ber(self) -> float:
+        return wilson_ci_hw(self.bit_errors, self.total_bits)
+
+    @property
+    def ci_fer_upper(self) -> float:
+        return wilson_upper(self.frame_errors, self.frames)
+
+    @property
+    def ci_ber_upper(self) -> float:
+        return wilson_upper(self.bit_errors, self.total_bits)
 
 
 # Extended-tier convergence_cdf probe parameters (matches lunalink's
@@ -711,15 +750,17 @@ def probe_error_floor(
                 if r.status == 1:
                     pt.not_converged += 1
         key = f"floor_{meta['name'].lower()}_{eb_n0_db}"
-        ci_upper = pt.fer + pt.ci_fer if pt.frame_errors else wilson_ci_hw(0, pt.frames)
+        ci_upper = wilson_upper(pt.frame_errors, pt.frames)
         results[key] = {
             "fer": pt.fer,
             "ber": pt.ber,
             "ci_fer": pt.ci_fer,
+            "ci_ber": pt.ci_ber,
             "frames": pt.frames,
             "frame_errors": pt.frame_errors,
             "total_bits": pt.total_bits,
             "ci_fer_upper": ci_upper,
+            "ci_ber_upper": wilson_upper(pt.bit_errors, pt.total_bits),
         }
         print(
             f"  [{meta['name']}] Eb/N0={eb_n0_db} dB  "
@@ -854,20 +895,26 @@ def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
 
     The verdict carries two distinct signals:
 
-    1. **Spec compliance** (`pass`, `at_eb_n0_db`, `ber`) — does the
-       decoder meet `BER < 1e-5` at the spec operating point
-       (Es/N0 ≥ 0 dB, i.e. Eb/N0 ≥ 3 dB for R=1/2)? Computed at the
-       lowest in-band grid point where the bar holds; binary outcome.
+    1. **Spec compliance** (`pass`, `at_eb_n0_db`, `ber`, `ci_ber_upper`)
+       — does the decoder meet `BER < 1e-5` at the spec operating point
+       (Es/N0 ≥ 0 dB, i.e. Eb/N0 ≥ 3 dB for R=1/2)? PASS iff the
+       **one-sided Wilson 95% upper bound** on BER is below the bar;
+       binary outcome. This is conservative — at zero observed errors,
+       it's still bounded above by `z²/(n + z²)`, which forces real
+       coverage rather than letting a lucky zero-count claim PASS.
 
     2. **Cross-team comparison** (`first_bar_crossing_eb_n0_db`,
        `margin_below_spec_db`) — at what Eb/N0 does the decoder first
-       achieve the bar, *regardless* of whether that's in the spec's
-       operating region? This is what differentiates implementations:
-       two cards that both PASS can sit several dB apart on this axis,
-       which is what `perf-card leaderboard` ranks on.
+       achieve the bar (by point estimate), *regardless* of whether
+       that's in the spec's operating region? This is what
+       differentiates implementations: two cards that both PASS can sit
+       several dB apart on this axis, which is what
+       `perf-card leaderboard` ranks on. Point estimate is intentional
+       here — the CI upper would null out short-frame submissions and
+       lose discrimination across teams.
     """
     in_band = [p for p in points if p.eb_n0_db >= LDPC_OPERATING_POINT_EB_N0_DB]
-    in_band_passing = [p for p in in_band if p.ber < LDPC_VERDICT_BAR_BER]
+    in_band_passing = [p for p in in_band if p.ci_ber_upper < LDPC_VERDICT_BAR_BER]
     if in_band_passing:
         anchor = min(in_band_passing, key=lambda p: p.eb_n0_db)
         verdict_pass = True
@@ -878,7 +925,8 @@ def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
         return {}
 
     # Comparison metric: lowest Eb/N0 anywhere on the waterfall where
-    # the decoder achieves the bar. May be lower than at_eb_n0_db.
+    # the point-estimate BER crosses the bar. May be lower than
+    # at_eb_n0_db. Uses point estimate (not CI upper) — see docstring.
     all_passing = [p for p in points if p.ber < LDPC_VERDICT_BAR_BER]
     if all_passing:
         first = min(all_passing, key=lambda p: p.eb_n0_db)
@@ -889,9 +937,11 @@ def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
         margin = None
 
     return {
-        "criterion": f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB",
+        "criterion": f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB (CI upper)",
         "at_eb_n0_db": anchor.eb_n0_db,
         "ber": anchor.ber,
+        "ci_ber": anchor.ci_ber,
+        "ci_ber_upper": anchor.ci_ber_upper,
         "pass": verdict_pass,
         # Comparison fields — used by leaderboard / compare ranking.
         "first_bar_crossing_eb_n0_db": first_eb_n0,
@@ -903,8 +953,10 @@ def sb1_verdict(points: list[GridPoint]) -> dict[str, Any]:
     """SB1 verdict block.
 
     Same two-signal structure as the LDPC verdict — spec compliance at
-    the operating point (Eb/N0 = 7.6 dB = Es/N0 0 dB at R=9/52), plus
-    comparison-only fields for ranking decoders that all PASS.
+    the operating point (Eb/N0 = 7.6 dB = Es/N0 0 dB at R=9/52) tested
+    against the one-sided Wilson 95% upper bound on FER, plus
+    comparison-only fields (point-estimate cliff) for ranking decoders
+    that all PASS.
     """
     op = next(
         (p for p in points if abs(p.eb_n0_db - SB1_OPERATING_POINT_EB_N0_DB) < 1e-6),
@@ -923,11 +975,12 @@ def sb1_verdict(points: list[GridPoint]) -> dict[str, Any]:
         margin = None
 
     return {
-        "criterion": f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB",
+        "criterion": f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB (CI upper)",
         "at_eb_n0_db": SB1_OPERATING_POINT_EB_N0_DB,
         "fer": op.fer,
         "ci_fer": op.ci_fer,
-        "pass": op.fer < SB1_VERDICT_BAR_FER,
+        "ci_fer_upper": op.ci_fer_upper,
+        "pass": op.ci_fer_upper < SB1_VERDICT_BAR_FER,
         # Comparison fields — used by leaderboard / compare ranking.
         "first_bar_crossing_eb_n0_db": first_eb_n0,
         "margin_below_spec_db": margin,
@@ -943,6 +996,7 @@ def waterfall_entry_ldpc(p: GridPoint) -> dict[str, Any]:
         "fer": p.fer,
         "ber": p.ber,
         "ci_fer": p.ci_fer,
+        "ci_ber": p.ci_ber,
         "frames": p.frames,
         "frame_errors": p.frame_errors,
         "bit_errors": p.bit_errors,
@@ -1279,8 +1333,8 @@ EXPECTED_METHODOLOGY = {
     "ci_method": "wilson_95",
 }
 EXPECTED_OPERATING_ES_N0_DB = 0.0
-EXPECTED_LDPC_VERDICT_CRITERION = f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB"
-EXPECTED_SB1_VERDICT_CRITERION = f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB"
+EXPECTED_LDPC_VERDICT_CRITERION = f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB (CI upper)"
+EXPECTED_SB1_VERDICT_CRITERION = f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB (CI upper)"
 
 
 def _validate_waterfall_row(
@@ -1290,7 +1344,7 @@ def _validate_waterfall_row(
     required = ["eb_n0_db", "fer", "ci_fer", "frames", "frame_errors"]
     if row_kind == "ldpc":
         # LDPC rows additionally carry bit-level statistics.
-        required += ["ber", "bit_errors", "total_bits"]
+        required += ["ber", "ci_ber", "bit_errors", "total_bits"]
     for k in required:
         if k not in row:
             errors.append(f"{path}: missing key '{k}'")
@@ -1317,7 +1371,7 @@ def _validate_ldpc_subframe(block: dict[str, Any], label: str, errors: list[str]
                 f"{path}.verdict.criterion: expected "
                 f"'{EXPECTED_LDPC_VERDICT_CRITERION}', got '{v.get('criterion')}'"
             )
-        for k in ("at_eb_n0_db", "ber", "pass"):
+        for k in ("at_eb_n0_db", "ber", "ci_ber_upper", "pass"):
             if k not in v:
                 errors.append(f"{path}.verdict: missing key '{k}'")
 
@@ -1422,8 +1476,20 @@ def validate_card(card: dict[str, Any]) -> list[str]:  # noqa: PLR0912
             subs = ldpc["subframes"]
             for label, block in subs.items():
                 _validate_ldpc_subframe(block, label, errors)
-            if "SF2" not in subs and "SF3_SF4" not in subs:
-                errors.append("ldpc.subframes: at least one of SF2 or SF3_SF4 expected")
+            # Core tier requires BOTH subframe blocks. A card that
+            # benchmarks only SF2 (or only SF3_SF4) is implementing a
+            # strictly smaller scope than a full LDPC decoder and must
+            # not be ranked apples-to-apples on the leaderboard. Adopters
+            # who only implement one subframe should explicitly declare
+            # `tier: partial` (not currently a tier — would be a future
+            # extension); for now they must run the missing subframe
+            # against a reference adapter or omit the ldpc block.
+            for required_sf in ("SF2", "SF3_SF4"):
+                if required_sf not in subs:
+                    errors.append(
+                        f"ldpc.subframes: '{required_sf}' is missing — "
+                        f"core tier requires both SF2 and SF3_SF4"
+                    )
 
     if has_sb1:
         _validate_sb1(card["sb1"], errors)
@@ -1792,16 +1858,21 @@ def _ldpc_subframe_entry(
     v = sub.get("verdict") or {}
     if "pass" not in v:
         return None
-    # Find the waterfall row matching the verdict point (for CI lookup).
+    # Find the waterfall row matching the verdict point (for display).
     wf = sub.get("waterfall", [])
     op_row = next(
         (r for r in wf if abs(r["eb_n0_db"] - v.get("at_eb_n0_db", -1)) < 1e-6),
         None,
     )
-    # Ranking metric: lowest Eb/N0 where bar is met (anywhere on the
-    # waterfall). Falls back to verdict.at_eb_n0_db for older cards that
-    # don't carry the comparison field.
+    # Find the waterfall row at the cliff (first bar crossing) — that's
+    # where the meaningful uncertainty lives, since BER/FER ≈ 0 at the
+    # spec point. The leaderboard renders frames at the cliff so the
+    # reader sees the sample size that backs the ranking metric.
     first_eb_n0 = v.get("first_bar_crossing_eb_n0_db", v["at_eb_n0_db"])
+    cliff_row = next(
+        (r for r in wf if abs(r["eb_n0_db"] - (first_eb_n0 or -1)) < 1e-6),
+        None,
+    )
     margin = v.get("margin_below_spec_db")
     return {
         "label": label,
@@ -1810,9 +1881,15 @@ def _ldpc_subframe_entry(
         "pass": bool(v["pass"]),
         "at_eb_n0_db": v["at_eb_n0_db"],
         "ber": v.get("ber", 0.0),
+        "ci_ber_upper": v.get("ci_ber_upper", 0.0),
         "fer": op_row["fer"] if op_row else 0.0,
         "ci_fer": op_row["ci_fer"] if op_row else 0.0,
         "frames": op_row["frames"] if op_row else 0,
+        # Sample size at the cliff: this is the n behind the ranking.
+        # Surfaced in the leaderboard table to expose low-frame
+        # submissions claiming the same cliff as high-frame ones.
+        "cliff_frames": cliff_row["frames"] if cliff_row else 0,
+        "cliff_ber": cliff_row.get("ber", 0.0) if cliff_row else 0.0,
         "first_bar_crossing_eb_n0_db": first_eb_n0,
         "margin_below_spec_db": margin,
     }
@@ -1831,6 +1908,10 @@ def _sb1_entry(label: str, path: Path, card: dict[str, Any]) -> dict[str, Any] |
         None,
     )
     first_eb_n0 = v.get("first_bar_crossing_eb_n0_db", v["at_eb_n0_db"])
+    cliff_row = next(
+        (r for r in wf if abs(r["eb_n0_db"] - (first_eb_n0 or -1)) < 1e-6),
+        None,
+    )
     margin = v.get("margin_below_spec_db")
     return {
         "label": label,
@@ -1841,7 +1922,10 @@ def _sb1_entry(label: str, path: Path, card: dict[str, Any]) -> dict[str, Any] |
         "at_eb_n0_db": v["at_eb_n0_db"],
         "fer": v.get("fer", op_row["fer"] if op_row else 0.0),
         "ci_fer": v.get("ci_fer", op_row["ci_fer"] if op_row else 0.0),
+        "ci_fer_upper": v.get("ci_fer_upper", 0.0),
         "frames": op_row["frames"] if op_row else 0,
+        "cliff_frames": cliff_row["frames"] if cliff_row else 0,
+        "cliff_fer": cliff_row.get("fer", 0.0) if cliff_row else 0.0,
         "first_bar_crossing_eb_n0_db": first_eb_n0,
         "margin_below_spec_db": margin,
     }
@@ -1853,12 +1937,23 @@ def _rank_with_ties(
     sort_key: str,
     secondary_key: str,
 ) -> list[dict[str, Any]]:
-    """Sort by sort_key ascending, then group adjacent entries whose CIs
-    overlap at the comparison point. Returns entries annotated with `rank`
-    (1-indexed) and `tied_with_prev` (bool).
+    """Sort by sort_key ascending; entries with identical sort_key form
+    a tied group. Returns entries annotated with `rank` (1-indexed) and
+    `tied_with_prev` (bool).
 
-    Sort_key is the primary metric (e.g., 'at_eb_n0_db' or 'fer').
-    Secondary_key is the FER at the comparison point used for CI overlap.
+    `sort_key` is the primary metric (`first_bar_crossing_eb_n0_db`).
+    It's **grid-quantised** — the cliff position is reported to the
+    grid resolution (0.1–0.2 dB around the LDPC cliff, 1.0 dB on the
+    BCH grid). Two cards with the same value have, by definition,
+    indistinguishable cliffs at the grid's resolution. We don't run an
+    extra CI-overlap test on a derived discrete quantity — it would
+    either be a no-op (FER ≈ 0 at the spec point used as the CI lookup
+    anchor) or paper over the genuine fact that the metric's
+    resolution IS the grid.
+
+    `secondary_key` provides a deterministic sub-ordering inside a
+    tied bucket (typically `fer` at the spec point — usually 0, so a
+    no-op, but reproducible).
     """
     if not entries:
         return entries
@@ -1871,33 +1966,19 @@ def _rank_with_ties(
         [e for e in entries if not e["pass"]],
         key=lambda e: e.get("ber", e.get("fer", float("inf"))),
     )
-    # Assign ranks within passing, group adjacent on CI overlap at
-    # secondary_key.
-    rank = 1
+    # Group adjacent passing entries by exact sort_key match — tie at
+    # grid resolution. No CI-overlap test — see docstring.
     for i, e in enumerate(passing):
         if i == 0:
-            e["rank"] = rank
+            e["rank"] = 1
             e["tied_with_prev"] = False
             continue
         prev = passing[i - 1]
-        # Tied iff same achievement bucket AND CI overlap at the
-        # operating row.
-        same_bucket = abs(e[sort_key] - prev[sort_key]) < 1e-9
-        overlap = (
-            _ci_overlap(
-                e[secondary_key],
-                e.get("ci_fer", 0.0),
-                prev[secondary_key],
-                prev.get("ci_fer", 0.0),
-            )
-            == "="
-        )
-        if same_bucket and overlap:
+        if abs(e[sort_key] - prev[sort_key]) < 1e-9:
             e["rank"] = prev["rank"]
             e["tied_with_prev"] = True
         else:
-            rank = i + 1
-            e["rank"] = rank
+            e["rank"] = i + 1
             e["tied_with_prev"] = False
     for e in failing:
         e["rank"] = None  # FAIL — below all passing
@@ -1913,49 +1994,68 @@ def _fmt_margin(v: float | None) -> str:
     return f"{v:>+4.1f} dB" if v is not None else "   — "
 
 
+def _fmt_frames(n: int) -> str:
+    """Compact frame-count display: 5000 → '5k', 100000 → '100k'."""
+    if n <= 0:
+        return "    —"
+    if n < 1000:
+        return f"{n:>5}"
+    if n < 1_000_000:
+        return f"{n / 1000:>4.0f}k"
+    return f"{n / 1_000_000:>4.1f}M"
+
+
 def _render_ldpc_table(title: str, entries: list[dict[str, Any]]) -> None:
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<38}{'bar @':>7}  {'spec @':>7}  {'margin':>8}")
+    print(
+        f"  {'RANK':<6}{'CARD':<28}{'DECODER':<32}"
+        f"{'bar @':>7}  {'spec @':>7}  {'margin':>8}  {'n@cliff':>8}"
+    )
     print("  " + "─" * 108)
     for e in entries:
         if e["pass"]:
             rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
             print(
                 f"  {rank_str:<6}"
-                f"{e['label'][:30]:<32}{e['decoder'][:36]:<38}"
+                f"{e['label'][:26]:<28}{e['decoder'][:30]:<32}"
                 f"{_fmt_eb_n0(e.get('first_bar_crossing_eb_n0_db')):>9}  "
                 f"{_fmt_eb_n0(e['at_eb_n0_db']):>9}  "
-                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}"
+                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}  "
+                f"{_fmt_frames(e.get('cliff_frames', 0)):>8}"
             )
         else:
             print(
                 f"  {'FAIL':<6}"
-                f"{e['label'][:30]:<32}{e['decoder'][:36]:<38}"
+                f"{e['label'][:26]:<28}{e['decoder'][:30]:<32}"
                 f"   best BER {e.get('ber', 0.0):.2e}"
             )
     print()
 
 
 def _render_sb1_table(entries: list[dict[str, Any]]) -> None:
-    title = "SB1 — verdict: FER < 0.01 at Es/N0 >= 0 dB"
+    title = "SB1 — verdict: FER < 0.01 at Es/N0 >= 0 dB (CI upper)"
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<38}{'bar @':>7}  {'spec @':>7}  {'margin':>8}")
+    print(
+        f"  {'RANK':<6}{'CARD':<28}{'DECODER':<32}"
+        f"{'bar @':>7}  {'spec @':>7}  {'margin':>8}  {'n@cliff':>8}"
+    )
     print("  " + "─" * 108)
     for e in entries:
         if e["pass"]:
             rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
-            decoder_with_class = f"{e['decoder'][:28]} ({e['decoder_class']})"
+            decoder_with_class = f"{e['decoder'][:22]} ({e['decoder_class']})"
             print(
                 f"  {rank_str:<6}"
-                f"{e['label'][:30]:<32}{decoder_with_class[:36]:<38}"
+                f"{e['label'][:26]:<28}{decoder_with_class[:30]:<32}"
                 f"{_fmt_eb_n0(e.get('first_bar_crossing_eb_n0_db')):>9}  "
                 f"{_fmt_eb_n0(e['at_eb_n0_db']):>9}  "
-                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}"
+                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}  "
+                f"{_fmt_frames(e.get('cliff_frames', 0)):>8}"
             )
         else:
-            print(f"  {'FAIL':<6}{e['label'][:30]:<32}{e['decoder'][:36]:<38}{e['fer']:>10.6f}")
+            print(f"  {'FAIL':<6}{e['label'][:26]:<28}{e['decoder'][:30]:<32}{e['fer']:>10.6f}")
     print()
 
 
@@ -2024,9 +2124,9 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
     # Human-readable.
     print(f"\nLeaderboard — {len(cards)} card(s)\n")
     if sf2:
-        _render_ldpc_table("LDPC SF2 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf2)
+        _render_ldpc_table("LDPC SF2 — verdict: BER < 1e-05 at Es/N0 >= 0 dB (CI upper)", sf2)
     if sf3:
-        _render_ldpc_table("LDPC SF3/SF4 — verdict: BER < 1e-05 at Es/N0 >= 0 dB", sf3)
+        _render_ldpc_table("LDPC SF3/SF4 — verdict: BER < 1e-05 at Es/N0 >= 0 dB (CI upper)", sf3)
     if sb1:
         _render_sb1_table(sb1)
     return 0
@@ -2062,15 +2162,17 @@ def _wilson_bounds(p: float, ci: float, frames: int) -> tuple[float, float]:
     Wilson's half-width `ci` is centred on the empirical proportion `p`,
     which goes to zero when no errors are observed. Naive `p - ci` is
     then negative and gets clipped to the log floor, producing a
-    misleading "cliff" in the CI band. Instead we report the Wilson-style
-    upper bound at p=0 (1 − (alpha/2)^(1/n) ≈ z²/(n+z²)) for the floor,
-    and the usual p+ci on the high side.
+    misleading "cliff" in the CI band. At p=0 we render the actual
+    one-sided Wilson upper bound (`z²/(n+z²)`, i.e. roughly 2× the
+    symmetric half-width) for the high side; otherwise the usual ± `ci`
+    around `p`.
     """
     if frames <= 0:
         return 1e-7, 1.5
     if p == 0.0:
-        # Tight one-sided upper bound when zero errors observed.
-        upper = ci  # Wilson half-width at p=0 IS the upper bound
+        # True one-sided 95% upper bound — `ci` (half-width) is only
+        # half of this at p=0, so don't reuse it here.
+        upper = wilson_upper(0, frames)
         return 1e-7, max(upper, 1e-7)
     return max(p - ci, 1e-7), min(p + ci, 1.5)
 

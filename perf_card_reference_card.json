@@ -65,7 +65,8 @@
             "frame_errors": 14411,
             "bit_errors": 8629981,
             "total_bits": 18000000,
-            "not_converged": 14411
+            "not_converged": 14411,
+            "ci_ber": 0.00023079288868829912
           },
           {
             "eb_n0_db": 0.4,
@@ -76,7 +77,8 @@
             "frame_errors": 12227,
             "bit_errors": 7322398,
             "total_bits": 18000000,
-            "not_converged": 12227
+            "not_converged": 12227,
+            "ci_ber": 0.00022693986845820794
           },
           {
             "eb_n0_db": 0.6,
@@ -87,7 +89,8 @@
             "frame_errors": 7980,
             "bit_errors": 4776235,
             "total_bits": 18000000,
-            "not_converged": 7979
+            "not_converged": 7979,
+            "ci_ber": 0.00020397065250971966
           },
           {
             "eb_n0_db": 0.8,
@@ -98,7 +101,8 @@
             "frame_errors": 3371,
             "bit_errors": 2018170,
             "total_bits": 18000000,
-            "not_converged": 3371
+            "not_converged": 3371,
+            "ci_ber": 0.00014576037059517414
           },
           {
             "eb_n0_db": 1.0,
@@ -109,7 +113,8 @@
             "frame_errors": 869,
             "bit_errors": 520035,
             "total_bits": 18000000,
-            "not_converged": 869
+            "not_converged": 869,
+            "ci_ber": 7.738097549978858e-05
           },
           {
             "eb_n0_db": 1.1,
@@ -120,7 +125,8 @@
             "frame_errors": 325,
             "bit_errors": 194286,
             "total_bits": 18000000,
-            "not_converged": 324
+            "not_converged": 324,
+            "ci_ber": 4.773630023486126e-05
           },
           {
             "eb_n0_db": 1.2,
@@ -131,7 +137,8 @@
             "frame_errors": 126,
             "bit_errors": 74852,
             "total_bits": 18000000,
-            "not_converged": 125
+            "not_converged": 125,
+            "ci_ber": 2.972919148512072e-05
           },
           {
             "eb_n0_db": 1.3,
@@ -142,7 +149,8 @@
             "frame_errors": 34,
             "bit_errors": 20415,
             "total_bits": 18000000,
-            "not_converged": 34
+            "not_converged": 34,
+            "ci_ber": 1.554969845871021e-05
           },
           {
             "eb_n0_db": 1.4,
@@ -153,7 +161,8 @@
             "frame_errors": 13,
             "bit_errors": 7833,
             "total_bits": 18000000,
-            "not_converged": 13
+            "not_converged": 13,
+            "ci_ber": 9.635619798210815e-06
           },
           {
             "eb_n0_db": 1.6,
@@ -164,7 +173,8 @@
             "frame_errors": 1,
             "bit_errors": 602,
             "total_bits": 18000000,
-            "not_converged": 1
+            "not_converged": 1,
+            "ci_ber": 2.673748893357447e-06
           },
           {
             "eb_n0_db": 2.0,
@@ -175,7 +185,8 @@
             "frame_errors": 0,
             "bit_errors": 0,
             "total_bits": 18000000,
-            "not_converged": 0
+            "not_converged": 0,
+            "ci_ber": 1.067110883365935e-07
           },
           {
             "eb_n0_db": 3.0,
@@ -186,16 +197,19 @@
             "frame_errors": 0,
             "bit_errors": 0,
             "total_bits": 18000000,
-            "not_converged": 0
+            "not_converged": 0,
+            "ci_ber": 1.067110883365935e-07
           }
         ],
         "verdict": {
-          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
+          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB (CI upper)",
           "at_eb_n0_db": 3.0,
           "ber": 0.0,
           "pass": true,
           "first_bar_crossing_eb_n0_db": 2.0,
-          "margin_below_spec_db": 1.0
+          "margin_below_spec_db": 1.0,
+          "ci_ber": 1.067110883365935e-07,
+          "ci_ber_upper": 2.13422176673187e-07
         }
       },
       "SF3_SF4": {
@@ -234,7 +248,8 @@
             "frame_errors": 14195,
             "bit_errors": 6170026,
             "total_bits": 13050000,
-            "not_converged": 14195
+            "not_converged": 14195,
+            "ci_ber": 0.0002708801215692002
           },
           {
             "eb_n0_db": 0.4,
@@ -245,7 +260,8 @@
             "frame_errors": 12029,
             "bit_errors": 5230785,
             "total_bits": 13050000,
-            "not_converged": 12029
+            "not_converged": 12029,
+            "ci_ber": 0.0002658919902325018
           },
           {
             "eb_n0_db": 0.6,
@@ -256,7 +272,8 @@
             "frame_errors": 8415,
             "bit_errors": 3656659,
             "total_bits": 13050000,
-            "not_converged": 8413
+            "not_converged": 8413,
+            "ci_ber": 0.0002436646515625036
           },
           {
             "eb_n0_db": 0.8,
@@ -267,7 +284,8 @@
             "frame_errors": 4302,
             "bit_errors": 1869907,
             "total_bits": 13050000,
-            "not_converged": 4302
+            "not_converged": 4302,
+            "ci_ber": 0.00019009601726060368
           },
           {
             "eb_n0_db": 1.0,
@@ -278,7 +296,8 @@
             "frame_errors": 1482,
             "bit_errors": 643672,
             "total_bits": 13050000,
-            "not_converged": 1482
+            "not_converged": 1482,
+            "ci_ber": 0.00011748825542367388
           },
           {
             "eb_n0_db": 1.1,
@@ -289,7 +308,8 @@
             "frame_errors": 815,
             "bit_errors": 354722,
             "total_bits": 13050000,
-            "not_converged": 815
+            "not_converged": 815,
+            "ci_ber": 8.822790162724737e-05
           },
           {
             "eb_n0_db": 1.2,
@@ -300,7 +320,8 @@
             "frame_errors": 355,
             "bit_errors": 153932,
             "total_bits": 13050000,
-            "not_converged": 355
+            "not_converged": 355,
+            "ci_ber": 5.8578016261180195e-05
           },
           {
             "eb_n0_db": 1.3,
@@ -311,7 +332,8 @@
             "frame_errors": 167,
             "bit_errors": 72586,
             "total_bits": 13050000,
-            "not_converged": 167
+            "not_converged": 167,
+            "ci_ber": 4.035186176591335e-05
           },
           {
             "eb_n0_db": 1.4,
@@ -322,7 +344,8 @@
             "frame_errors": 57,
             "bit_errors": 24834,
             "total_bits": 13050000,
-            "not_converged": 57
+            "not_converged": 57,
+            "ci_ber": 2.364631993932598e-05
           },
           {
             "eb_n0_db": 1.6,
@@ -333,7 +356,8 @@
             "frame_errors": 9,
             "bit_errors": 3924,
             "total_bits": 13050000,
-            "not_converged": 9
+            "not_converged": 9,
+            "ci_ber": 9.408010290496208e-06
           },
           {
             "eb_n0_db": 2.0,
@@ -344,7 +368,8 @@
             "frame_errors": 0,
             "bit_errors": 0,
             "total_bits": 13050000,
-            "not_converged": 0
+            "not_converged": 0,
+            "ci_ber": 1.47187696135153e-07
           },
           {
             "eb_n0_db": 3.0,
@@ -355,16 +380,19 @@
             "frame_errors": 0,
             "bit_errors": 0,
             "total_bits": 13050000,
-            "not_converged": 0
+            "not_converged": 0,
+            "ci_ber": 1.47187696135153e-07
           }
         ],
         "verdict": {
-          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
+          "criterion": "BER < 1e-05 at Es/N0 >= 0 dB (CI upper)",
           "at_eb_n0_db": 3.0,
           "ber": 0.0,
           "pass": true,
           "first_bar_crossing_eb_n0_db": 2.0,
-          "margin_below_spec_db": 1.0
+          "margin_below_spec_db": 1.0,
+          "ci_ber": 1.47187696135153e-07,
+          "ci_ber_upper": 2.94375392270306e-07
         }
       }
     }
@@ -438,13 +466,14 @@
       }
     ],
     "verdict": {
-      "criterion": "FER < 0.01 at Es/N0 >= 0 dB",
+      "criterion": "FER < 0.01 at Es/N0 >= 0 dB (CI upper)",
       "at_eb_n0_db": 7.6,
       "fer": 0.0,
       "ci_fer": 4.2680800831900534e-05,
       "pass": true,
       "first_bar_crossing_eb_n0_db": 3.0,
-      "margin_below_spec_db": 4.6
+      "margin_below_spec_db": 4.6,
+      "ci_fer_upper": 8.536160166380107e-05
     }
   }
 }

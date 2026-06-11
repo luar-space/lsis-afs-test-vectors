@@ -174,17 +174,27 @@ Each verdict block carries **two distinct signals** — spec compliance
 
 | Code | Criterion | `at_eb_n0_db` (per-code Eb/N0 for Es/N0 = 0 dB) |
 |---|---|---|
-| LDPC SF2 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | 3.0 |
-| LDPC SF3/SF4 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | 3.0 |
-| SB1 (BCH) | `FER < 0.01 at Es/N0 ≥ 0 dB` | 7.6 |
+| LDPC SF2 | `BER < 1e-5 at Es/N0 ≥ 0 dB (CI upper)` | 3.0 |
+| LDPC SF3/SF4 | `BER < 1e-5 at Es/N0 ≥ 0 dB (CI upper)` | 3.0 |
+| SB1 (BCH) | `FER < 0.01 at Es/N0 ≥ 0 dB (CI upper)` | 7.6 |
 
 LDPC verdict bar is sourced from the LSIS spec's BER goal for nav-data
 recovery. SB1 verdict bar is sourced from the interop PDF's "Frame
 Detection Rate > 99%" requirement (1 − 0.99 = 0.01).
 
-When zero frame errors are observed at the verdict point, the card
-reports the **CI upper bound** as the empirical bound on FER/BER. The
-verdict passes iff the CI upper bound is below the bar.
+The PASS test compares the **one-sided Wilson 95% upper bound** on
+BER (LDPC) or FER (SB1) to the bar. At zero observed errors this is
+`z² / (n + z²)` — the rule-of-three-style bound, *not* the symmetric
+half-width (which is half that, and would let a lucky zero claim PASS
+on too few frames). The verdict block carries both the point estimate
+(`ber` / `fer`) and the CI upper (`ci_ber_upper` / `ci_fer_upper`) so
+adopters can sanity-check the verdict against their own assumptions.
+
+The harness validator requires **both** `SF2` and `SF3_SF4` LDPC
+subframe blocks for a `core` tier card (they're different codes, not
+flavours of the same one). A submission that benchmarks only one
+subframe is implementing a strictly smaller scope and is not
+apples-to-apples comparable on the per-code leaderboards.
 
 ### 4.2 Cross-team comparison
 
@@ -195,12 +205,29 @@ ranking implementations:
 
 | Field | Meaning |
 |---|---|
-| `first_bar_crossing_eb_n0_db` | Lowest Eb/N0 anywhere on the waterfall where the bar is met, ignoring whether that Eb/N0 sits in the spec's operating region. Two decoders that both PASS at the spec boundary will differ here by up to several dB. |
-| `margin_below_spec_db` | `at_eb_n0_db − first_bar_crossing_eb_n0_db`. Positive values mean the decoder achieves the bar *below* the spec's operating point — i.e., has dB of margin. |
+| `first_bar_crossing_eb_n0_db` | Lowest Eb/N0 *on the grid* where the **point estimate** crosses the bar, ignoring whether that Eb/N0 sits in the spec's operating region. Point estimate (not CI upper) is intentional here — using the CI upper would null this out for short-frame submissions and lose discrimination. |
+| `margin_below_spec_db` | Mathematically derived: `at_eb_n0_db − first_bar_crossing_eb_n0_db`. Since `at_eb_n0_db` is constant per code (3.0 dB for LDPC, 7.6 dB for SB1), this field is a literal restatement of the cliff in a different reference frame — not a second independent metric. |
 
 `perf-card leaderboard` ranks cards by `first_bar_crossing_eb_n0_db`
 ascending (lower = better implementation). The PASS/FAIL outcome stays
 as the conformance gate; the cliff position is the discriminator.
+
+**Grid resolution caveat.** `first_bar_crossing_eb_n0_db` is reported
+to grid resolution — not interpolated. The LDPC grid has 0.1–0.2 dB
+spacing around the cliff (1.0–1.6 dB), the BCH grid has 1.0 dB spacing
+throughout. Two implementations whose true cliffs differ by less than
+the local grid step typically report the same value (tied at the
+grid's resolution); a 0.1 dB reported difference on the LDPC grid is
+real; a 1.0 dB reported difference on the BCH grid may overstate the
+true gap by up to a grid step. Tied cards on the leaderboard are
+indistinguishable at the grid's resolution — no extra CI-overlap test
+is applied to a derived discrete quantity.
+
+The leaderboard also surfaces the **frame count at the cliff row**
+(`n@cliff` column) — readers should treat low-frame submissions
+(e.g., < 1000 frames at the cliff) as nominal ranking signals
+backed by an underpowered sample. A future tier extension may pin a
+minimum frame count; for now the disclosure is per-row.
 
 For decoders that don't meet the bar anywhere on the grid, both
 comparison fields are `null`. The compliance verdict still reports
@@ -280,23 +307,25 @@ implement the production version without comments.
         "frames_per_seed": 5000,
         "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0],
         "waterfall": [
-          {"eb_n0_db": 0.2, "fer": 0.9607, "ber": 0.479, "ci_fer": 0.0031,
+          {"eb_n0_db": 0.2, "fer": 0.9607, "ber": 0.479,
+           "ci_fer": 0.0031, "ci_ber": 0.00023,
            "frames": 15000, "frame_errors": 14411, "bit_errors": 7194000,
            "total_bits": 18000000, "not_converged": 14411}
           // … one entry per grid point
         ],
         "verdict": {
-          // Spec compliance — does the decoder meet the bar at the spec
-          // operating-point boundary?
-          "criterion":    "BER < 1e-05 at Es/N0 >= 0 dB",
+          // Spec compliance — Wilson 95% upper bound on BER below the bar.
+          "criterion":    "BER < 1e-05 at Es/N0 >= 0 dB (CI upper)",
           "at_eb_n0_db":  3.0,           // = Es/N0 0 dB at R=1/2
-          "ber":          0.0,           // BER at that point (CI gives upper bound when zero)
+          "ber":          0.0,           // point estimate
+          "ci_ber":       2.13e-7,       // symmetric Wilson half-width
+          "ci_ber_upper": 4.27e-7,       // one-sided Wilson 95% upper — verdict tests this
           "pass":         true,
           // Cross-team comparison metric — where the cliff actually is.
           // Multiple decoders that all PASS at the spec boundary will
           // still differ here by ~dB; this is what `leaderboard` ranks.
-          "first_bar_crossing_eb_n0_db": 2.0,   // lowest Eb/N0 (anywhere) where BER < 1e-5
-          "margin_below_spec_db":         1.0   // = at_eb_n0_db − first_bar_crossing_eb_n0_db
+          "first_bar_crossing_eb_n0_db": 2.0,   // lowest Eb/N0 (anywhere) where point-est BER < 1e-5
+          "margin_below_spec_db":         1.0   // derived: at_eb_n0_db − first_bar_crossing_eb_n0_db
         }
       },
       "SF3_SF4": {                     // same code as SF3 alone; reported once
@@ -336,13 +365,14 @@ implement the production version without comments.
       // … one entry per grid point
     ],
     "verdict": {
-      "criterion":   "FER < 0.01 at Es/N0 >= 0 dB",
-      "at_eb_n0_db": 7.6,              // = Es/N0 0 dB at R=9/52
-      "fer":         0.0,
-      "ci_fer":      0.0000427,        // CI upper bound when fer==0
-      "pass":        true,
+      "criterion":     "FER < 0.01 at Es/N0 >= 0 dB (CI upper)",
+      "at_eb_n0_db":   7.6,              // = Es/N0 0 dB at R=9/52
+      "fer":           0.0,              // point estimate
+      "ci_fer":        4.27e-5,          // symmetric Wilson half-width at p=0
+      "ci_fer_upper":  8.54e-5,          // one-sided Wilson 95% upper — verdict tests this
+      "pass":          true,
       "first_bar_crossing_eb_n0_db": 3.0,   // cliff position (comparison metric)
-      "margin_below_spec_db":         4.6
+      "margin_below_spec_db":         4.6   // derived: 7.6 − 3.0
     }
   },
 
