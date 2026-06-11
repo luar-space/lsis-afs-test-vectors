@@ -114,7 +114,12 @@ HARNESS_VERSION = "1.0.0"
 
 # Spec-grounded verdict bars.
 LDPC_VERDICT_BAR_BER = 1e-5
-LDPC_OPERATING_POINT_EB_N0_DB = 0.0  # = Es/N0 0 dB at R=1/2
+# Spec operating point converted into the code's Eb/N0 axis:
+#   Es/N0 [dB] = Eb/N0 [dB] + 10·log10(R)
+# so Es/N0 = 0 dB  ⟺  Eb/N0 = 10·log10(1/R).
+# For LDPC R = 1/2 → Eb/N0 = 10·log10(2) ≈ 3.01 dB.
+# (The 3.0 dB grid point is the boundary of the spec operating region.)
+LDPC_OPERATING_POINT_EB_N0_DB = 3.0  # = Es/N0 0 dB at R=1/2
 SB1_VERDICT_BAR_FER = 0.01
 SB1_OPERATING_POINT_EB_N0_DB = 7.6  # = Es/N0 0 dB at R=9/52
 
@@ -845,39 +850,87 @@ def probe_saturation_stress(
 
 
 def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
-    """Lowest grid point at Eb/N0 ≥ 0 where BER < 1e-5; else best in-band."""
+    """LDPC verdict block.
+
+    The verdict carries two distinct signals:
+
+    1. **Spec compliance** (`pass`, `at_eb_n0_db`, `ber`) — does the
+       decoder meet `BER < 1e-5` at the spec operating point
+       (Es/N0 ≥ 0 dB, i.e. Eb/N0 ≥ 3 dB for R=1/2)? Computed at the
+       lowest in-band grid point where the bar holds; binary outcome.
+
+    2. **Cross-team comparison** (`first_bar_crossing_eb_n0_db`,
+       `margin_below_spec_db`) — at what Eb/N0 does the decoder first
+       achieve the bar, *regardless* of whether that's in the spec's
+       operating region? This is what differentiates implementations:
+       two cards that both PASS can sit several dB apart on this axis,
+       which is what `perf-card leaderboard` ranks on.
+    """
     in_band = [p for p in points if p.eb_n0_db >= LDPC_OPERATING_POINT_EB_N0_DB]
-    passing = [p for p in in_band if p.ber < LDPC_VERDICT_BAR_BER]
-    if passing:
-        anchor = min(passing, key=lambda p: p.eb_n0_db)
+    in_band_passing = [p for p in in_band if p.ber < LDPC_VERDICT_BAR_BER]
+    if in_band_passing:
+        anchor = min(in_band_passing, key=lambda p: p.eb_n0_db)
         verdict_pass = True
     elif in_band:
         anchor = min(in_band, key=lambda p: p.ber)
         verdict_pass = False
     else:
         return {}
+
+    # Comparison metric: lowest Eb/N0 anywhere on the waterfall where
+    # the decoder achieves the bar. May be lower than at_eb_n0_db.
+    all_passing = [p for p in points if p.ber < LDPC_VERDICT_BAR_BER]
+    if all_passing:
+        first = min(all_passing, key=lambda p: p.eb_n0_db)
+        first_eb_n0 = first.eb_n0_db
+        margin = anchor.eb_n0_db - first_eb_n0
+    else:
+        first_eb_n0 = None
+        margin = None
+
     return {
         "criterion": f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB",
         "at_eb_n0_db": anchor.eb_n0_db,
         "ber": anchor.ber,
         "pass": verdict_pass,
+        # Comparison fields — used by leaderboard / compare ranking.
+        "first_bar_crossing_eb_n0_db": first_eb_n0,
+        "margin_below_spec_db": margin,
     }
 
 
 def sb1_verdict(points: list[GridPoint]) -> dict[str, Any]:
-    """FER at the spec operating point (Eb/N0 = 7.6 dB = Es/N0 0 dB at R=9/52)."""
+    """SB1 verdict block.
+
+    Same two-signal structure as the LDPC verdict — spec compliance at
+    the operating point (Eb/N0 = 7.6 dB = Es/N0 0 dB at R=9/52), plus
+    comparison-only fields for ranking decoders that all PASS.
+    """
     op = next(
         (p for p in points if abs(p.eb_n0_db - SB1_OPERATING_POINT_EB_N0_DB) < 1e-6),
         None,
     )
     if op is None:
         return {}
+
+    all_passing = [p for p in points if p.fer < SB1_VERDICT_BAR_FER]
+    if all_passing:
+        first = min(all_passing, key=lambda p: p.eb_n0_db)
+        first_eb_n0 = first.eb_n0_db
+        margin = SB1_OPERATING_POINT_EB_N0_DB - first_eb_n0
+    else:
+        first_eb_n0 = None
+        margin = None
+
     return {
         "criterion": f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB",
         "at_eb_n0_db": SB1_OPERATING_POINT_EB_N0_DB,
         "fer": op.fer,
         "ci_fer": op.ci_fer,
         "pass": op.fer < SB1_VERDICT_BAR_FER,
+        # Comparison fields — used by leaderboard / compare ranking.
+        "first_bar_crossing_eb_n0_db": first_eb_n0,
+        "margin_below_spec_db": margin,
     }
 
 
@@ -1745,6 +1798,11 @@ def _ldpc_subframe_entry(
         (r for r in wf if abs(r["eb_n0_db"] - v.get("at_eb_n0_db", -1)) < 1e-6),
         None,
     )
+    # Ranking metric: lowest Eb/N0 where bar is met (anywhere on the
+    # waterfall). Falls back to verdict.at_eb_n0_db for older cards that
+    # don't carry the comparison field.
+    first_eb_n0 = v.get("first_bar_crossing_eb_n0_db", v["at_eb_n0_db"])
+    margin = v.get("margin_below_spec_db")
     return {
         "label": label,
         "path": str(path),
@@ -1755,6 +1813,8 @@ def _ldpc_subframe_entry(
         "fer": op_row["fer"] if op_row else 0.0,
         "ci_fer": op_row["ci_fer"] if op_row else 0.0,
         "frames": op_row["frames"] if op_row else 0,
+        "first_bar_crossing_eb_n0_db": first_eb_n0,
+        "margin_below_spec_db": margin,
     }
 
 
@@ -1770,6 +1830,8 @@ def _sb1_entry(label: str, path: Path, card: dict[str, Any]) -> dict[str, Any] |
         (r for r in wf if abs(r["eb_n0_db"] - v.get("at_eb_n0_db", -1)) < 1e-6),
         None,
     )
+    first_eb_n0 = v.get("first_bar_crossing_eb_n0_db", v["at_eb_n0_db"])
+    margin = v.get("margin_below_spec_db")
     return {
         "label": label,
         "path": str(path),
@@ -1780,6 +1842,8 @@ def _sb1_entry(label: str, path: Path, card: dict[str, Any]) -> dict[str, Any] |
         "fer": v.get("fer", op_row["fer"] if op_row else 0.0),
         "ci_fer": v.get("ci_fer", op_row["ci_fer"] if op_row else 0.0),
         "frames": op_row["frames"] if op_row else 0,
+        "first_bar_crossing_eb_n0_db": first_eb_n0,
+        "margin_below_spec_db": margin,
     }
 
 
@@ -1841,24 +1905,33 @@ def _rank_with_ties(
     return passing + failing
 
 
+def _fmt_eb_n0(v: float | None) -> str:
+    return f"{v:>4.1f} dB" if v is not None else "  — "
+
+
+def _fmt_margin(v: float | None) -> str:
+    return f"{v:>+4.1f} dB" if v is not None else "   — "
+
+
 def _render_ldpc_table(title: str, entries: list[dict[str, Any]]) -> None:
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}{'at Eb/N0':>9}  {'FER':>10}  {'± CI':>10}")
-    print("  " + "─" * 110)
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<38}{'bar @':>7}  {'spec @':>7}  {'margin':>8}")
+    print("  " + "─" * 108)
     for e in entries:
         if e["pass"]:
             rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
             print(
                 f"  {rank_str:<6}"
-                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
-                f"{e['at_eb_n0_db']:>6.1f} dB  "
-                f"{e['fer']:>10.6f}  {e['ci_fer']:>10.6f}"
+                f"{e['label'][:30]:<32}{e['decoder'][:36]:<38}"
+                f"{_fmt_eb_n0(e.get('first_bar_crossing_eb_n0_db')):>9}  "
+                f"{_fmt_eb_n0(e['at_eb_n0_db']):>9}  "
+                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}"
             )
         else:
             print(
                 f"  {'FAIL':<6}"
-                f"{e['label'][:30]:<32}{e['decoder'][:38]:<40}"
+                f"{e['label'][:30]:<32}{e['decoder'][:36]:<38}"
                 f"   best BER {e.get('ber', 0.0):.2e}"
             )
     print()
@@ -1868,19 +1941,21 @@ def _render_sb1_table(entries: list[dict[str, Any]]) -> None:
     title = "SB1 — verdict: FER < 0.01 at Es/N0 >= 0 dB"
     print(title)
     print("─" * len(title))
-    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<40}{'FER':>10}  {'± CI':>10}")
-    print("  " + "─" * 100)
+    print(f"  {'RANK':<6}{'CARD':<32}{'DECODER':<38}{'bar @':>7}  {'spec @':>7}  {'margin':>8}")
+    print("  " + "─" * 108)
     for e in entries:
         if e["pass"]:
             rank_str = f"{e['rank']:>3}" + ("=" if e["tied_with_prev"] else " ")
-            decoder_with_class = f"{e['decoder'][:30]} ({e['decoder_class']})"
+            decoder_with_class = f"{e['decoder'][:28]} ({e['decoder_class']})"
             print(
                 f"  {rank_str:<6}"
-                f"{e['label'][:30]:<32}{decoder_with_class[:38]:<40}"
-                f"{e['fer']:>10.6f}  {e['ci_fer']:>10.6f}"
+                f"{e['label'][:30]:<32}{decoder_with_class[:36]:<38}"
+                f"{_fmt_eb_n0(e.get('first_bar_crossing_eb_n0_db')):>9}  "
+                f"{_fmt_eb_n0(e['at_eb_n0_db']):>9}  "
+                f"{_fmt_margin(e.get('margin_below_spec_db')):>9}"
             )
         else:
-            print(f"  {'FAIL':<6}{e['label'][:30]:<32}{e['decoder'][:38]:<40}{e['fer']:>10.6f}")
+            print(f"  {'FAIL':<6}{e['label'][:30]:<32}{e['decoder'][:36]:<38}{e['fer']:>10.6f}")
     print()
 
 
@@ -1920,9 +1995,15 @@ def cmd_leaderboard(args: argparse.Namespace) -> int:
             sb1.append(e)
 
     # Rank (sort by achievement Eb/N0 for LDPC, by op-point FER for SB1).
-    sf2 = _rank_with_ties(sf2, sort_key="at_eb_n0_db", secondary_key="fer")
-    sf3 = _rank_with_ties(sf3, sort_key="at_eb_n0_db", secondary_key="fer")
-    sb1 = _rank_with_ties(sb1, sort_key="fer", secondary_key="fer")
+    # Rank by `first_bar_crossing_eb_n0_db` — the cliff position. Lower
+    # = better implementation. `at_eb_n0_db` (the spec-compliance point)
+    # is constant for all PASSing decoders so doesn't discriminate.
+    sf2 = _rank_with_ties(sf2, sort_key="first_bar_crossing_eb_n0_db", secondary_key="fer")
+    sf3 = _rank_with_ties(sf3, sort_key="first_bar_crossing_eb_n0_db", secondary_key="fer")
+    # SB1 has so much margin (FER=0 at any reasonable Eb/N0 ≥ 5 dB) that
+    # ranking by the cliff position is more informative than ranking by
+    # the operating-point FER (which is ~0 for every passing decoder).
+    sb1 = _rank_with_ties(sb1, sort_key="first_bar_crossing_eb_n0_db", secondary_key="fer")
 
     if args.json:
         sys.stdout.write(
@@ -2014,44 +2095,62 @@ def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
     fers_lo, fers_hi = _ci_band_arrays(wf)
 
     ax.fill_between(
-        ebs, fers_lo, fers_hi,
-        color=RENDER_PALETTE["ci_band"], alpha=0.35, label="FER 95% CI",
+        ebs,
+        fers_lo,
+        fers_hi,
+        color=RENDER_PALETTE["ci_band"],
+        alpha=0.35,
+        label="FER 95% CI",
     )
-    ax.semilogy(ebs, fers, "o-", color=RENDER_PALETTE["fer"],
-                linewidth=2.5, markersize=7, label="FER")
-    ax.semilogy(ebs, bers, "s--", color=RENDER_PALETTE["ber"],
-                linewidth=1.5, markersize=5, label="BER")
+    ax.semilogy(
+        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.5, markersize=7, label="FER"
+    )
+    ax.semilogy(
+        ebs, bers, "s--", color=RENDER_PALETTE["ber"], linewidth=1.5, markersize=5, label="BER"
+    )
 
-    ax.axhline(LDPC_VERDICT_BAR_BER, color=RENDER_PALETTE["spec_bar"],
-               linestyle=":", linewidth=1.5, alpha=0.7)
-    ax.text(ebs[0], LDPC_VERDICT_BAR_BER * 1.6, "spec: BER < 1e-5",
-            color=RENDER_PALETTE["spec_bar"], fontsize=8,
-            va="bottom", ha="left")
+    ax.axhline(
+        LDPC_VERDICT_BAR_BER,
+        color=RENDER_PALETTE["spec_bar"],
+        linestyle=":",
+        linewidth=1.5,
+        alpha=0.7,
+    )
+    ax.text(
+        ebs[0],
+        LDPC_VERDICT_BAR_BER * 1.6,
+        "spec: BER < 1e-5",
+        color=RENDER_PALETTE["spec_bar"],
+        fontsize=8,
+        va="bottom",
+        ha="left",
+    )
 
     # Verdict achievement: shade region from achievement Eb/N0 to right
     # edge instead of drawing a tall vertical bar over the curves.
     v = sub.get("verdict") or {}
     if v.get("pass"):
         x_pass = v["at_eb_n0_db"]
-        ax.axvspan(x_pass, ebs[-1],
-                   color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
-        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"],
-                   linewidth=1.5, alpha=0.6)
+        ax.axvspan(x_pass, ebs[-1], color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
+        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"], linewidth=1.5, alpha=0.6)
         # Achievement annotation at the top of the panel, well clear of curves.
         ax.annotate(
             f"PASS\n@ {x_pass:.1f} dB",
             xy=(x_pass, 1.0),
             xytext=(x_pass + 0.05, 0.7),
-            fontsize=9, fontweight="bold",
+            fontsize=9,
+            fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="left", va="top",
+            ha="left",
+            va="top",
         )
 
     code = sub.get("code", {})
     ax.set_title(
         f"LDPC {title}  (k={code.get('k', '?')}, n={code.get('n', '?')}, "
         f"R={code.get('rate', '?')})",
-        fontsize=12, fontweight="bold",
+        fontsize=12,
+        fontweight="bold",
     )
     ax.set_xlabel("Eb/N0 (dB)")
     ax.set_ylabel("error rate (log)")
@@ -2067,33 +2166,44 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
     fers = [_floor_for_log(p["fer"]) for p in wf]
     fers_lo, fers_hi = _ci_band_arrays(wf)
 
-    ax.fill_between(ebs, fers_lo, fers_hi,
-                    color=RENDER_PALETTE["ci_band"], alpha=0.35,
-                    label="FER 95% CI")
-    ax.semilogy(ebs, fers, "o-", color=RENDER_PALETTE["fer"],
-                linewidth=2.5, markersize=7, label="FER")
+    ax.fill_between(
+        ebs, fers_lo, fers_hi, color=RENDER_PALETTE["ci_band"], alpha=0.35, label="FER 95% CI"
+    )
+    ax.semilogy(
+        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.5, markersize=7, label="FER"
+    )
 
-    ax.axhline(SB1_VERDICT_BAR_FER, color=RENDER_PALETTE["spec_bar"],
-               linestyle=":", linewidth=1.5, alpha=0.7)
-    ax.text(ebs[0], SB1_VERDICT_BAR_FER * 1.6,
-            "spec: FER < 0.01 (Frame-Detection > 99%)",
-            color=RENDER_PALETTE["spec_bar"], fontsize=8,
-            va="bottom", ha="left")
+    ax.axhline(
+        SB1_VERDICT_BAR_FER,
+        color=RENDER_PALETTE["spec_bar"],
+        linestyle=":",
+        linewidth=1.5,
+        alpha=0.7,
+    )
+    ax.text(
+        ebs[0],
+        SB1_VERDICT_BAR_FER * 1.6,
+        "spec: FER < 0.01 (Frame-Detection > 99%)",
+        color=RENDER_PALETTE["spec_bar"],
+        fontsize=8,
+        va="bottom",
+        ha="left",
+    )
 
     v = sb1.get("verdict") or {}
     if v.get("pass"):
         x_pass = v["at_eb_n0_db"]
-        ax.axvspan(x_pass, ebs[-1],
-                   color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
-        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"],
-                   linewidth=1.5, alpha=0.6)
+        ax.axvspan(x_pass, ebs[-1], color=RENDER_PALETTE["verdict_pass"], alpha=0.07)
+        ax.axvline(x_pass, color=RENDER_PALETTE["verdict_pass"], linewidth=1.5, alpha=0.6)
         ax.annotate(
             f"PASS @ {x_pass:.1f} dB",
             xy=(x_pass, 1.0),
             xytext=(x_pass - 0.2, 0.5),
-            fontsize=10, fontweight="bold",
+            fontsize=10,
+            fontweight="bold",
             color=RENDER_PALETTE["verdict_pass"],
-            ha="right", va="center",
+            ha="right",
+            va="center",
         )
 
     decoder = sb1.get("decoder", {})
@@ -2101,7 +2211,8 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
     ax.set_title(
         f"SB1 / BCH  (k={code.get('k', '?')}, n={code.get('n', '?')}, "
         f"R={code.get('rate', '?')}, {decoder.get('class', '?')})",
-        fontsize=12, fontweight="bold",
+        fontsize=12,
+        fontweight="bold",
     )
     ax.set_xlabel("Eb/N0 (dB)")
     ax.set_ylabel("FER (log)")
@@ -2111,53 +2222,118 @@ def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
 
 
 def _draw_verdict_panel(ax, card: dict[str, Any]) -> None:
-    """Verdict summary panel with PASS/FAIL pill badges."""
+    """Verdict summary panel.
+
+    Each row carries TWO numbers:
+      - 'spec @ X dB' — verdict point (Es/N0=0 boundary in per-code Eb/N0)
+      - 'bar @ Y dB' — comparison metric: first Eb/N0 where bar is met
+                       anywhere on the waterfall (the cliff position)
+    The margin (X − Y) is what distinguishes implementations that all PASS.
+    """
     ax.axis("off")
     rows = []
     if "ldpc" in card:
         for sf_name, sub in card["ldpc"].get("subframes", {}).items():
             v = sub.get("verdict") or {}
             label = "LDPC " + ("SF3/SF4" if sf_name == "SF3_SF4" else sf_name)
-            rows.append((
-                label,
-                v.get("criterion", "?"),
-                f"{v.get('at_eb_n0_db', '?')} dB",
-                bool(v.get("pass")),
-            ))
+            rows.append(
+                (
+                    label,
+                    v.get("criterion", "?"),
+                    v.get("at_eb_n0_db"),
+                    v.get("first_bar_crossing_eb_n0_db"),
+                    v.get("margin_below_spec_db"),
+                    bool(v.get("pass")),
+                )
+            )
     if "sb1" in card:
         v = card["sb1"].get("verdict") or {}
-        rows.append((
-            "SB1 (BCH)",
-            v.get("criterion", "?"),
-            f"{v.get('at_eb_n0_db', '?')} dB",
-            bool(v.get("pass")),
-        ))
+        rows.append(
+            (
+                "SB1 (BCH)",
+                v.get("criterion", "?"),
+                v.get("at_eb_n0_db"),
+                v.get("first_bar_crossing_eb_n0_db"),
+                v.get("margin_below_spec_db"),
+                bool(v.get("pass")),
+            )
+        )
 
-    ax.text(0.02, 0.95, "Verdicts", fontsize=14, fontweight="bold",
-            transform=ax.transAxes, va="top")
+    ax.text(
+        0.02, 0.95, "Verdicts", fontsize=14, fontweight="bold", transform=ax.transAxes, va="top"
+    )
+    ax.text(
+        0.02,
+        0.88,
+        "spec @ = boundary point   ·   bar @ = cliff position   ·   "
+        "margin = spec − cliff (more is better)",
+        fontsize=7,
+        color=RENDER_PALETTE["text_dim"],
+        transform=ax.transAxes,
+        va="top",
+    )
 
     if not rows:
         return
-    row_h = 0.78 / len(rows)
-    for i, (label, criterion, achieved, passed) in enumerate(rows):
-        y = 0.85 - (i + 0.5) * row_h
-        color = (RENDER_PALETTE["verdict_pass"] if passed
-                 else RENDER_PALETTE["verdict_fail"])
+    row_h = 0.72 / len(rows)
+    for i, (label, criterion, spec_db, cliff_db, margin_db, passed) in enumerate(rows):
+        y = 0.78 - (i + 0.5) * row_h
+        color = RENDER_PALETTE["verdict_pass"] if passed else RENDER_PALETTE["verdict_fail"]
         status = "PASS" if passed else "FAIL"
 
-        ax.text(0.02, y, "  " + status + "  ",
-                fontsize=11, fontweight="bold", color="white",
-                bbox={"facecolor": color, "edgecolor": "none",
-                      "boxstyle": "round,pad=0.4"},
-                transform=ax.transAxes, va="center")
-        ax.text(0.20, y, label, fontsize=11, fontweight="bold",
-                transform=ax.transAxes, va="center")
-        ax.text(0.20, y - row_h * 0.30, criterion, fontsize=8,
-                color=RENDER_PALETTE["text_dim"],
-                transform=ax.transAxes, va="center")
-        ax.text(0.98, y, f"achieved @ {achieved}", fontsize=10,
-                color=color, fontweight="bold",
-                transform=ax.transAxes, va="center", ha="right")
+        ax.text(
+            0.02,
+            y,
+            "  " + status + "  ",
+            fontsize=11,
+            fontweight="bold",
+            color="white",
+            bbox={"facecolor": color, "edgecolor": "none", "boxstyle": "round,pad=0.4"},
+            transform=ax.transAxes,
+            va="center",
+        )
+        ax.text(
+            0.20,
+            y + row_h * 0.18,
+            label,
+            fontsize=11,
+            fontweight="bold",
+            transform=ax.transAxes,
+            va="center",
+        )
+        ax.text(
+            0.20,
+            y - row_h * 0.20,
+            criterion,
+            fontsize=8,
+            color=RENDER_PALETTE["text_dim"],
+            transform=ax.transAxes,
+            va="center",
+        )
+        spec_str = f"{spec_db:.1f} dB" if spec_db is not None else "—"
+        cliff_str = f"{cliff_db:.1f} dB" if cliff_db is not None else "—"
+        margin_str = f"+{margin_db:.1f} dB" if margin_db is not None else "—"
+        ax.text(
+            0.98,
+            y + row_h * 0.18,
+            f"spec @ {spec_str}   ·   bar @ {cliff_str}",
+            fontsize=10,
+            color=color,
+            fontweight="bold",
+            transform=ax.transAxes,
+            va="center",
+            ha="right",
+        )
+        ax.text(
+            0.98,
+            y - row_h * 0.20,
+            f"margin: {margin_str}",
+            fontsize=9,
+            color=RENDER_PALETTE["text_dim"],
+            transform=ax.transAxes,
+            va="center",
+            ha="right",
+        )
 
 
 def _draw_header_footer(fig, card: dict[str, Any]) -> None:
@@ -2167,21 +2343,17 @@ def _draw_header_footer(fig, card: dict[str, Any]) -> None:
     methodology = card.get("methodology", {})
     channel = card.get("channel", {})
 
-    fig.suptitle("LSIS-AFS — Decoder Performance Card",
-                 fontsize=18, fontweight="bold", y=0.97)
+    fig.suptitle("LSIS-AFS — Decoder Performance Card", fontsize=18, fontweight="bold", y=0.97)
     subtitle = (
         f"LDPC: {ldpc.get('decoder', '?')}   ·   "
         f"SB1: {sb1_dec.get('name', '?')} ({sb1_dec.get('class', '?')})"
     )
-    fig.text(0.5, 0.935, subtitle, ha="center", fontsize=11,
-             color=RENDER_PALETTE["text_dim"])
+    fig.text(0.5, 0.935, subtitle, ha="center", fontsize=11, color=RENDER_PALETTE["text_dim"])
 
     anchor_text = (
-        f"reference: {anchor.get('repo', '?')}"
-        f"@{anchor.get('tag', anchor.get('commit', '?'))}"
+        f"reference: {anchor.get('repo', '?')}@{anchor.get('tag', anchor.get('commit', '?'))}"
     )
-    fig.text(0.99, 0.97, anchor_text, ha="right", fontsize=8,
-             color=RENDER_PALETTE["text_dim"])
+    fig.text(0.99, 0.97, anchor_text, ha="right", fontsize=8, color=RENDER_PALETTE["text_dim"])
 
     footer = (
         f"{channel.get('model', '?')}   ·   "
@@ -2192,22 +2364,27 @@ def _draw_header_footer(fig, card: dict[str, Any]) -> None:
         f"tier: {card.get('tier', '?')}   ·   "
         f"{card.get('produced_at', '?')}"
     )
-    fig.text(0.5, 0.012, footer, ha="center", fontsize=7,
-             color=RENDER_PALETTE["text_dim"])
+    fig.text(0.5, 0.012, footer, ha="center", fontsize=7, color=RENDER_PALETTE["text_dim"])
 
 
 def render_card(card: dict[str, Any], out_path: Path) -> None:
     """Render an algo card to PNG / PDF / SVG (matplotlib infers from suffix)."""
-    import matplotlib  # type: ignore[import-not-found]
+    import matplotlib  # type: ignore[import-not-found]  # noqa: PLC0415
+
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt  # type: ignore[import-not-found]
+    import matplotlib.pyplot as plt  # type: ignore[import-not-found]  # noqa: PLC0415
 
     fig = plt.figure(figsize=(15, 10), dpi=120)
     gs = fig.add_gridspec(
-        2, 2,
+        2,
+        2,
         height_ratios=[3, 3],
-        hspace=0.40, wspace=0.22,
-        left=0.06, right=0.97, top=0.88, bottom=0.05,
+        hspace=0.40,
+        wspace=0.22,
+        left=0.06,
+        right=0.97,
+        top=0.88,
+        bottom=0.05,
     )
 
     _draw_header_footer(fig, card)
@@ -2228,11 +2405,10 @@ def render_card(card: dict[str, Any], out_path: Path) -> None:
 
 def cmd_render(args: argparse.Namespace) -> int:
     try:
-        import matplotlib  # noqa: F401 — probe optional dep
+        import matplotlib  # noqa: F401, PLC0415 — probe optional dep
     except ImportError:
         print(
-            "render requires matplotlib. Install with: "
-            "pip install 'lsis-afs-test-vectors[render]'",
+            "render requires matplotlib. Install with: pip install 'lsis-afs-test-vectors[render]'",
             file=sys.stderr,
         )
         return 2
@@ -2409,7 +2585,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rdp.add_argument("card", help="Algo card JSON to render.")
     rdp.add_argument(
-        "--out", required=True,
+        "--out",
+        required=True,
         help="Output path. Format inferred from extension: .png / .pdf / .svg.",
     )
     rdp.set_defaults(func=cmd_render)

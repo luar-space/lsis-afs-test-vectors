@@ -191,9 +191,11 @@
         ],
         "verdict": {
           "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
-          "at_eb_n0_db": 2.0,
+          "at_eb_n0_db": 3.0,
           "ber": 0.0,
-          "pass": true
+          "pass": true,
+          "first_bar_crossing_eb_n0_db": 2.0,
+          "margin_below_spec_db": 1.0
         }
       },
       "SF3_SF4": {
@@ -358,9 +360,11 @@
         ],
         "verdict": {
           "criterion": "BER < 1e-05 at Es/N0 >= 0 dB",
-          "at_eb_n0_db": 2.0,
+          "at_eb_n0_db": 3.0,
           "ber": 0.0,
-          "pass": true
+          "pass": true,
+          "first_bar_crossing_eb_n0_db": 2.0,
+          "margin_below_spec_db": 1.0
         }
       }
     }
@@ -438,7 +442,9 @@
       "at_eb_n0_db": 7.6,
       "fer": 0.0,
       "ci_fer": 4.2680800831900534e-05,
-      "pass": true
+      "pass": true,
+      "first_bar_crossing_eb_n0_db": 3.0,
+      "margin_below_spec_db": 4.6
     }
   }
 }

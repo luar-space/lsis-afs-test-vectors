@@ -148,25 +148,35 @@ Per-code Eb/N0 grids and default frame counts:
 | 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0 | 5000 |
 | 2 | **SF3** (LDPC, applies to SF3+SF4) | 870 | 1740 | 1/2 | same as SF2 | 5000 |
 
-Operating-point Eb/N0 = (Es/N0 + 10·log10(1/R)). With Es/N0 = 0 dB:
-- SB1 (R=9/52): Eb/N0 = 7.6 dB
-- LDPC SF2/SF3 (R=1/2): Eb/N0 = 0 dB
+Operating-point Eb/N0 derives from Es/N0 via the code rate:
+`Es/N0 [dB] = Eb/N0 [dB] + 10·log10(R)`, so
+`Eb/N0 [dB] = Es/N0 [dB] + 10·log10(1/R)`. With Es/N0 = 0 dB:
 
-The LDPC operating point at 0 dB sits at/below the spec verdict bar's
-achievement region for any practical decoder. The "achievement point"
-reported in the LDPC verdict is therefore the **lowest grid point at
-Eb/N0 ≥ 0 dB where the decoder achieves the bar**, not Eb/N0 = 0 dB
-exactly.
+- SB1 (R = 9/52): Eb/N0 = 10·log10(52/9) ≈ **7.6 dB**
+- LDPC SF2/SF3 (R = 1/2): Eb/N0 = 10·log10(2) ≈ **3.0 dB**
+
+These are the boundary of the spec operating region for each code.
+The verdict's `at_eb_n0_db` reports the **lowest in-band grid point
+where the bar is met** — i.e., the lowest grid point with Eb/N0 ≥
+the per-code operating-point Eb/N0 above where BER (LDPC) or FER
+(SB1) drops below the bar. For monotone waterfalls (LDPC, BCH soft-ML)
+this is also the lowest Eb/N0 anywhere in the operating region where
+the bar holds.
 
 ---
 
 ## 4. Verdicts
 
-| Code | Criterion | Achievement reported |
+Each verdict block carries **two distinct signals** — spec compliance
+(binary) and cross-team comparison (continuous).
+
+### 4.1 Spec compliance
+
+| Code | Criterion | `at_eb_n0_db` (per-code Eb/N0 for Es/N0 = 0 dB) |
 |---|---|---|
-| LDPC SF2 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | Lowest grid point in band where BER < 1e-5 |
-| LDPC SF3/SF4 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | Same |
-| SB1 (BCH) | `FER < 0.01 at Es/N0 ≥ 0 dB` | FER at Eb/N0 = 7.6 dB (the operating point) |
+| LDPC SF2 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | 3.0 |
+| LDPC SF3/SF4 | `BER < 1e-5 at Es/N0 ≥ 0 dB` | 3.0 |
+| SB1 (BCH) | `FER < 0.01 at Es/N0 ≥ 0 dB` | 7.6 |
 
 LDPC verdict bar is sourced from the LSIS spec's BER goal for nav-data
 recovery. SB1 verdict bar is sourced from the interop PDF's "Frame
@@ -175,6 +185,26 @@ Detection Rate > 99%" requirement (1 − 0.99 = 0.01).
 When zero frame errors are observed at the verdict point, the card
 reports the **CI upper bound** as the empirical bound on FER/BER. The
 verdict passes iff the CI upper bound is below the bar.
+
+### 4.2 Cross-team comparison
+
+The spec-compliance verdict has a binary outcome; once two cards both
+PASS, it tells you nothing more. Two additional fields on each verdict
+block surface the **cliff position** — the load-bearing signal for
+ranking implementations:
+
+| Field | Meaning |
+|---|---|
+| `first_bar_crossing_eb_n0_db` | Lowest Eb/N0 anywhere on the waterfall where the bar is met, ignoring whether that Eb/N0 sits in the spec's operating region. Two decoders that both PASS at the spec boundary will differ here by up to several dB. |
+| `margin_below_spec_db` | `at_eb_n0_db − first_bar_crossing_eb_n0_db`. Positive values mean the decoder achieves the bar *below* the spec's operating point — i.e., has dB of margin. |
+
+`perf-card leaderboard` ranks cards by `first_bar_crossing_eb_n0_db`
+ascending (lower = better implementation). The PASS/FAIL outcome stays
+as the conformance gate; the cliff position is the discriminator.
+
+For decoders that don't meet the bar anywhere on the grid, both
+comparison fields are `null`. The compliance verdict still reports
+its best in-band point with `pass: false`.
 
 ---
 
@@ -256,10 +286,17 @@ implement the production version without comments.
           // … one entry per grid point
         ],
         "verdict": {
+          // Spec compliance — does the decoder meet the bar at the spec
+          // operating-point boundary?
           "criterion":    "BER < 1e-05 at Es/N0 >= 0 dB",
-          "at_eb_n0_db":  2.0,         // lowest in-band grid point where BER < 1e-5
-          "ber":          0.0,
-          "pass":         true
+          "at_eb_n0_db":  3.0,           // = Es/N0 0 dB at R=1/2
+          "ber":          0.0,           // BER at that point (CI gives upper bound when zero)
+          "pass":         true,
+          // Cross-team comparison metric — where the cliff actually is.
+          // Multiple decoders that all PASS at the spec boundary will
+          // still differ here by ~dB; this is what `leaderboard` ranks.
+          "first_bar_crossing_eb_n0_db": 2.0,   // lowest Eb/N0 (anywhere) where BER < 1e-5
+          "margin_below_spec_db":         1.0   // = at_eb_n0_db − first_bar_crossing_eb_n0_db
         }
       },
       "SF3_SF4": {                     // same code as SF3 alone; reported once
@@ -303,7 +340,9 @@ implement the production version without comments.
       "at_eb_n0_db": 7.6,              // = Es/N0 0 dB at R=9/52
       "fer":         0.0,
       "ci_fer":      0.0000427,        // CI upper bound when fer==0
-      "pass":        true
+      "pass":        true,
+      "first_bar_crossing_eb_n0_db": 3.0,   // cliff position (comparison metric)
+      "margin_below_spec_db":         4.6
     }
   },
 

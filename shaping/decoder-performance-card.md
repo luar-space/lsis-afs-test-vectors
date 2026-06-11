@@ -207,7 +207,7 @@ codes; both anchor to a common operating point `Es/N0 = 0 dB`.
 🟡 **LDPC (R=1/2)** — lunalink's SF2/SF3 hi-res sweep as-is:
 {0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0} dB (**12 pts**,
 not the "0.5→3.0 dB, 9 pts" the earlier draft claimed). Dense at the
-waterfall knee + the spec point at Eb/N0 = 0 dB = Es/N0 0 dB. Sub-1e-5
+waterfall knee + the spec point at Eb/N0 ≈ 3.0 dB (= Es/N0 0 dB at R=1/2). Sub-1e-5
 probing is extended/full tier.
 
 🟡 **SB1/BCH (R=9/52)** — lunalink's BCH waterfall sweep as-is:
@@ -291,7 +291,7 @@ comparable with a `full` one.
         ],
         "verdict": {
           "criterion":    "BER < 1e-5 at Es/N0 ≥ 0 dB",
-          "at_eb_n0_db":  0.0,           // = Es/N0 0 dB at R=1/2
+          "at_eb_n0_db":  3.0,           // = Es/N0 0 dB at R=1/2 (Eb/N0 = 10·log10(2) ≈ 3 dB)
           "ber":          0.0,
           "pass":         true
         }
@@ -429,8 +429,9 @@ algo cards with LDPC + methodology blocks byte-identical across families,
 differing only in `sb1:`. Sample run:
 
 - **Soft card**: LDPC SF2/SF3-SF4 verdict `BER<1e-5 @ Es/N0≥0 dB` cleared
-  at Eb/N0 = 2.0 dB (BER=0 measured); SB1 soft-ML verdict
-  `FER<0.01 @ Es/N0≥0 dB` cleared at Eb/N0 = 7.6 dB (FER=0, 0/30000).
+  at Eb/N0 = 3.0 dB (= Es/N0 0 dB at R=1/2; BER=0 measured); SB1 soft-ML
+  verdict `FER<0.01 @ Es/N0≥0 dB` cleared at Eb/N0 = 7.6 dB
+  (= Es/N0 0 dB at R=9/52; FER=0, 0/30000).
 - **Hard card**: identical LDPC; SB1 hard-ML verdict cleared at
   Eb/N0 = 7.6 dB (FER=3.3e-5, 1/30000) — ~10× higher than soft but well
   under the 0.01 bar, as the family-neutral verdict was designed to be.
