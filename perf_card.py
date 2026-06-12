@@ -126,7 +126,7 @@ BCH_OPERATING_EB_N0 = 7.6
 # the operator is `//`. 3× is what runs.) The point of the bump is to
 # tighten the Wilson upper bound at FER=0 so the conformance claim
 # (`ci_fer_upper < 0.01`) doesn't depend on the slow-grid frame count.
-BCH_OPERATING_FRAMES_FACTOR = 10000 // 3000  # = 3, integer truncation of 10k/3k
+BCH_OPERATING_FRAMES_FACTOR = 5  # = same 5× as the cliff zone, for uniform CI floor
 
 # Bump frame count across the LDPC cliff zone (1.4–2.0 dB inclusive).
 # Without the bump, the Wilson CI half-width on ~450 errors in 13M
@@ -136,18 +136,26 @@ BCH_OPERATING_FRAMES_FACTOR = 10000 // 3000  # = 3, integer truncation of 10k/3k
 # without changing any verdict outcome.
 LDPC_CLIFF_FRAMES_FACTOR = 3
 LDPC_CLIFF_EB_N0_MIN = 1.4
-LDPC_CLIFF_EB_N0_MAX = 2.0
+LDPC_CLIFF_EB_N0_MAX = 3.0  # extends through the tail-to-spec range so the
+# Wilson upper bound at zero-error tail points (2.25–3.0 dB) matches the
+# cliff zone — without this, the tail had fewer frames and the
+# upper-bound line jumped ~3× upward at the 2.0→2.25 transition (less
+# visible than the analogous BCH artefact because the values sit at
+# ~1e-7, but still cosmetically inconsistent).
 
-# Bump frame count across the BCH cliff zone (3.0–5.0 dB inclusive).
+# Bump frame count across the BCH cliff zone (3.0–6.0 dB inclusive).
 # At baseline 5000 frames/seed × 3 = 15000 frames per point, points
 # above the 3.0 dB cliff hit small frame_error counts (1–25 events)
 # producing ±20–100% Wilson CI half-widths — visible non-smoothness
 # on the waterfall. 5× brings it into ±5–25% range across the
-# visible cliff descent. Does NOT affect the verdict (which lives at
-# the 7.6 dB op point) — purely waterfall presentation quality.
+# visible cliff descent. Range extends to 6.0 dB (rather than 5.0)
+# so the post-cliff floor at 6.0 dB has the SAME Wilson upper bound
+# at p=0 as the cliff points themselves — without the bump, 6.0 dB
+# had fewer frames and the resulting upper-bound jumped above 5.0
+# dB's, producing a visually misleading "band going up" artefact.
 BCH_CLIFF_FRAMES_FACTOR = 5
 BCH_CLIFF_EB_N0_MIN = 3.0
-BCH_CLIFF_EB_N0_MAX = 5.0
+BCH_CLIFF_EB_N0_MAX = 6.0
 
 CODES = {
     0: {
