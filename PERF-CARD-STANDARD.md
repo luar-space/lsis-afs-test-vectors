@@ -357,7 +357,7 @@ implement the production version without comments.
     },
     "frame_error_definition":
       "decoded FID != transmitted OR decoded TOI != transmitted",
-    "frames_per_seed_default": 3000,   // bumps at the operating point
+    "frames_per_seed_default": 5000,   // per-seed; 3× at the operating point
     "eb_n0_grid_db": [2.0, 3.0, 4.0, 5.0, 6.0, 7.6],
     "waterfall": [
       {"eb_n0_db": 2.0, "fer": 0.023, "ci_fer": 0.0024,
