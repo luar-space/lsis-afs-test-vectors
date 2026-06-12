@@ -34,10 +34,13 @@ V3+ deferred:
 from __future__ import annotations
 
 import argparse
+import atexit
 import concurrent.futures
+import contextlib
 import json
 import math
 import os
+import select
 import shlex
 import struct
 import subprocess
@@ -66,7 +69,12 @@ BCH_GRID = (2.0, 3.0, 4.0, 5.0, 6.0, 7.6)
 # Per-grid-point frames_per_seed override (BCH bumps at the operating point
 # for tighter CI on the verdict row, mirroring lunalink).
 BCH_OPERATING_EB_N0 = 7.6
-BCH_OPERATING_FRAMES_FACTOR = 10000 // 3000  # = 3.33×; rounded to int
+# Bump the BCH operating-point frame count: integer division of
+# 10000 / 3000 → 3. (Was once described as "≈3.33×" — that was wrong;
+# the operator is `//`. 3× is what runs.) The point of the bump is to
+# tighten the Wilson upper bound at FER=0 so the conformance claim
+# (`ci_fer_upper < 0.01`) doesn't depend on the slow-grid frame count.
+BCH_OPERATING_FRAMES_FACTOR = 10000 // 3000  # = 3, integer truncation of 10k/3k
 
 CODES = {
     0: {
@@ -122,6 +130,14 @@ LDPC_VERDICT_BAR_BER = 1e-5
 LDPC_OPERATING_POINT_EB_N0_DB = 3.0  # = Es/N0 0 dB at R=1/2
 SB1_VERDICT_BAR_FER = 0.01
 SB1_OPERATING_POINT_EB_N0_DB = 7.6  # = Es/N0 0 dB at R=9/52
+
+# Per-frame timeout — how long we wait for the adapter to reply with
+# one decoded frame. A hung adapter must NOT hang the harness
+# indefinitely; we kill the subprocess and re-raise. 60 s is wide
+# enough for any reasonable software LDPC decoder at the densest grid
+# point on slow hardware; raise via the env var below for unusual
+# adapters (FPGA bringup, single-step debug).
+ADAPTER_READ_TIMEOUT_S = float(os.environ.get("PERF_CARD_ADAPTER_TIMEOUT", "60"))
 
 
 # ─── BCH (FID, TOI) ↔ 9-bit info packing convention ──────────────────────
@@ -302,16 +318,85 @@ def _send_length_prefixed_json(stream, obj: dict[str, Any]) -> None:
     stream.flush()
 
 
+def _drain_stderr_nonblocking(stderr_stream) -> str:
+    """Best-effort drain of an adapter's stderr pipe — returns up to a
+    few KB of recent output for attaching to error messages. Never
+    blocks: if `select` shows nothing readable, returns ''. Used by
+    callers that hold the `proc` object to enrich exception messages
+    when a stream read or handshake fails (see one_frame, run_harness
+    finally blocks)."""
+    if stderr_stream is None:
+        return ""
+    chunks: list[bytes] = []
+    total = 0
+    cap = 4096
+    try:
+        fd = stderr_stream.fileno()
+    except (OSError, ValueError):
+        return ""
+    while total < cap:
+        ready, _, _ = select.select([fd], [], [], 0.05)
+        if not ready:
+            break
+        try:
+            chunk = stderr_stream.read(min(1024, cap - total))
+        except (OSError, ValueError):
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _read_exact(stream, n: int, *, timeout_s: float | None = None) -> bytes:
+    """Read exactly `n` bytes from a binary stream, raising on EOF or
+    (optionally) timeout. Honours `ADAPTER_READ_TIMEOUT_S` by default
+    so a hung adapter doesn't hang the harness indefinitely.
+
+    `subprocess.Popen` wraps its `stdout` with a `BufferedReader`, whose
+    8 KB buffer may already hold the bytes we want — in which case the
+    underlying kernel fd is empty and `select` would block. We use
+    `peek()` to check the buffer first, and only `select` on the raw
+    fd when the buffer is empty. That way we get the timeout behaviour
+    we want without spuriously waiting for kernel data that's already
+    been consumed into the Python wrapper.
+    """
+    if timeout_s is None:
+        timeout_s = ADAPTER_READ_TIMEOUT_S
+    fd = stream.fileno()
+    buf = bytearray()
+    while len(buf) < n:
+        # Fast path: if BufferedReader already has bytes queued, drain
+        # those before going to select. `peek` returns whatever is
+        # buffered without blocking (an empty bytes if the buffer is
+        # also empty).
+        peek = stream.peek(1) if hasattr(stream, "peek") else b""
+        if not peek:
+            # Kernel buffer check — wait up to timeout_s for the
+            # adapter to write SOMETHING. If nothing arrives, declare
+            # the adapter wedged and bail.
+            ready, _, _ = select.select([fd], [], [], timeout_s)
+            if not ready:
+                raise RuntimeError(
+                    f"adapter timed out (no bytes within {timeout_s:g}s, "
+                    f"want {n - len(buf)} more / {n} total) — "
+                    f"set PERF_CARD_ADAPTER_TIMEOUT=N to widen the window."
+                )
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            raise RuntimeError(
+                f"adapter closed stream (got {len(buf)} bytes, expected {n}) — "
+                f"check the adapter's stderr (captured to subprocess.PIPE)."
+            )
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def _recv_length_prefixed_json(stream) -> dict[str, Any]:
-    n_bytes = stream.read(4)
-    if len(n_bytes) < 4:
-        raise RuntimeError("counterparty closed stream during handshake")
+    n_bytes = _read_exact(stream, 4)
     n = struct.unpack("<I", n_bytes)[0]
-    payload = stream.read(n)
-    if len(payload) < n:
-        raise RuntimeError(
-            f"counterparty closed stream mid-handshake (got {len(payload)} bytes, expected {n})"
-        )
+    payload = _read_exact(stream, n)
     return json.loads(payload)
 
 
@@ -339,6 +424,37 @@ def handshake_with_adapter(proc: subprocess.Popen[bytes]) -> dict[str, Any]:
     if not isinstance(adapter, dict):
         raise RuntimeError(f"adapter block missing or malformed: {resp}")
     return adapter
+
+
+def _validate_adapter_supports(adapter_info: dict[str, Any], code_ids: list[int]) -> None:
+    """Cross-check the adapter's handshake-declared `supports_codes` list
+    against the codes the harness was asked to sweep. If the adapter
+    self-declares it doesn't support a code we're about to send it, fail
+    loudly here rather than letting per-frame reads silently misbehave.
+
+    `supports_codes` is optional in the handshake — if missing, we
+    print a warning but proceed (the adapter may be a legacy
+    pre-handshake-v1 build that doesn't declare it).
+    """
+    supports = adapter_info.get("supports_codes")
+    if supports is None:
+        print(
+            "[harness] adapter did not declare supports_codes — proceeding "
+            "(set adapter.supports_codes = [...] in handshake to silence this).",
+            file=sys.stderr,
+        )
+        return
+    if not isinstance(supports, list):
+        raise RuntimeError(f"adapter.supports_codes must be a list, got {type(supports).__name__}")
+    requested = {CODES[cid]["name"] for cid in code_ids}
+    declared = set(supports)
+    missing = requested - declared
+    if missing:
+        raise RuntimeError(
+            f"adapter does not support requested code(s): {sorted(missing)} "
+            f"(declared: {sorted(declared)}). Either rebuild the adapter with "
+            f"these codes supported, or restrict --codes to a supported subset."
+        )
 
 
 def adapter_decoder_meta(adapter_info: dict[str, Any]) -> dict[str, str]:
@@ -398,22 +514,24 @@ def one_frame(
     proc.stdin.write(request)
     proc.stdin.flush()
 
-    # Response.
-    hdr = proc.stdout.read(RESPONSE_HEADER_LEN)
-    if len(hdr) < RESPONSE_HEADER_LEN:
-        raise RuntimeError(
-            f"adapter closed stdout mid-response (got {len(hdr)} bytes, "
-            f"expected {RESPONSE_HEADER_LEN})"
-        )
-    status, iters_used, n_info_recovered = struct.unpack(RESPONSE_HEADER_FMT, hdr)
-    if n_info_recovered != meta["n_info_bits"]:
-        raise RuntimeError(
-            f"adapter returned wrong info-bit count for {meta['name']}: "
-            f"got {n_info_recovered}, expected {meta['n_info_bits']}"
-        )
-    decoded = np.frombuffer(proc.stdout.read(n_info_recovered), dtype=np.uint8)
-    if len(decoded) < n_info_recovered:
-        raise RuntimeError("adapter closed stdout mid-info-bits")
+    # Response. Use _read_exact for the timeout-honouring path — a hung
+    # adapter must not hang the harness. On any error, attach the
+    # adapter's recent stderr to the exception so the caller has
+    # context.
+    try:
+        hdr = _read_exact(proc.stdout, RESPONSE_HEADER_LEN)
+        status, iters_used, n_info_recovered = struct.unpack(RESPONSE_HEADER_FMT, hdr)
+        if n_info_recovered != meta["n_info_bits"]:
+            raise RuntimeError(
+                f"adapter returned wrong info-bit count for {meta['name']}: "
+                f"got {n_info_recovered}, expected {meta['n_info_bits']}"
+            )
+        decoded = np.frombuffer(_read_exact(proc.stdout, n_info_recovered), dtype=np.uint8)
+    except RuntimeError as e:
+        tail = _drain_stderr_nonblocking(proc.stderr)
+        if tail:
+            raise RuntimeError(f"{e}\n[adapter stderr tail]\n{tail}") from e
+        raise
 
     diffs = info != decoded
     bit_errors = int(diffs.sum())
@@ -505,7 +623,7 @@ def sweep_one_grid_point(
     else:
         this_frames = frames_per_seed
     for seed in SEEDS:
-        ss = np.random.SeedSequence(entropy=seed, spawn_key=(code_id, int(eb_n0_db * 1000)))
+        ss = np.random.SeedSequence(entropy=seed, spawn_key=(code_id, round(eb_n0_db * 1000)))
         rng = np.random.default_rng(ss)
         for _ in range(this_frames):
             r = one_frame(proc, rng, code_id, sigma, sigma_sq, max_iters)
@@ -553,14 +671,52 @@ def sweep_code(
 _worker_proc: subprocess.Popen[bytes] | None = None
 
 
+def _close_adapter(proc: subprocess.Popen[bytes], *, wait_s: float = 10.0) -> int | None:
+    """Send EOF on stdin, wait for clean exit, kill on timeout. Safe to
+    call multiple times; safe if the adapter already exited
+    (BrokenPipeError on close is squashed). Returns the exit code if we
+    got one, else None."""
+    if proc.stdin is not None and not proc.stdin.closed:
+        with contextlib.suppress(BrokenPipeError, OSError):
+            proc.stdin.close()  # adapter already gone is fine
+    try:
+        return proc.wait(timeout=wait_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            return proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            return None
+
+
+def _worker_cleanup_adapter() -> None:
+    """atexit hook — reap the worker's adapter when the worker shuts
+    down (clean exit, exception, or pool teardown). Without this, an
+    adapter that ignores stdin EOF can outlive its parent and consume a
+    CPU until the OS kills it."""
+    global _worker_proc  # noqa: PLW0603 — module-level singleton, set in _worker_init
+    if _worker_proc is None:
+        return
+    _close_adapter(_worker_proc, wait_s=2.0)
+    _worker_proc = None
+
+
 def _worker_init(decoder_cmd: list[str]) -> None:
-    """Called once per worker process. Spawns the adapter and handshakes."""
+    """Called once per worker process. Spawns the adapter and handshakes.
+
+    Captures the adapter's stderr in a pipe so harness can attach
+    context when a frame read fails or the handshake aborts. Registers
+    an atexit cleanup so the adapter subprocess is reaped on worker
+    shutdown rather than orphaned.
+    """
     global _worker_proc  # noqa: PLW0603 — per-worker singleton, set once at init
     _worker_proc = subprocess.Popen(
         decoder_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,  # captured ring buffer; surfaced on error
     )
+    atexit.register(_worker_cleanup_adapter)
     handshake_with_adapter(_worker_proc)
 
 
@@ -581,16 +737,12 @@ def _worker_handshake_only(decoder_cmd: list[str]) -> dict[str, Any]:
         decoder_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
     try:
         info = handshake_with_adapter(proc)
     finally:
-        assert proc.stdin is not None
-        proc.stdin.close()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _close_adapter(proc, wait_s=5.0)
     return info
 
 
@@ -691,7 +843,7 @@ def probe_convergence_cdf(
         for seed in SEEDS:
             ss = np.random.SeedSequence(
                 entropy=seed,
-                spawn_key=(code_id, int(eb_n0_db * 1000), max_iters, 0xC0FE),
+                spawn_key=(code_id, round(eb_n0_db * 1000), max_iters, 0xC0FE),
             )
             rng = np.random.default_rng(ss)
             for _ in range(frames_per_seed):
@@ -737,7 +889,7 @@ def probe_error_floor(
         for seed in SEEDS:
             ss = np.random.SeedSequence(
                 entropy=seed,
-                spawn_key=(code_id, int(eb_n0_db * 1000), 0xF100),
+                spawn_key=(code_id, round(eb_n0_db * 1000), 0xF100),
             )
             rng = np.random.default_rng(ss)
             for _ in range(frames_per_seed):
@@ -795,7 +947,7 @@ def probe_error_patterns(
         # Single seed by convention (matches lunalink).
         ss = np.random.SeedSequence(
             entropy=SEEDS[0],
-            spawn_key=(code_id, int(eb_n0_db * 1000), 0xE7E7),
+            spawn_key=(code_id, round(eb_n0_db * 1000), 0xE7E7),
         )
         rng = np.random.default_rng(ss)
         per_frame_errs: list[int] = []
@@ -859,7 +1011,7 @@ def probe_saturation_stress(
         for seed in SEEDS:
             ss = np.random.SeedSequence(
                 entropy=seed,
-                spawn_key=(code_id, int(eb_n0_db * 1000), 0x5A57),
+                spawn_key=(code_id, round(eb_n0_db * 1000), 0x5A57),
             )
             rng = np.random.default_rng(ss)
             for _ in range(frames_per_seed):
@@ -1154,7 +1306,7 @@ def build_algo_card(
 # ─── CLI ─────────────────────────────────────────────────────────────────
 
 
-def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally cleanup
+def run_harness(
     *,
     decoder_cmd: list[str],
     code_ids: list[int],
@@ -1206,6 +1358,7 @@ def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally
                 decoder_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
             handshake_with_adapter(proc)
             try:
@@ -1218,12 +1371,7 @@ def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally
                     error_patterns = probe_error_patterns(proc, code_id=1)
                     saturation_stress = probe_saturation_stress(proc, code_id=1)
             finally:
-                assert proc.stdin is not None
-                proc.stdin.close()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _close_adapter(proc, wait_s=10.0)
     else:
         # ── Serial path (single adapter, every probe) ──
         print(f"[harness] spawning adapter: {decoder_cmd}", file=sys.stderr)
@@ -1231,8 +1379,10 @@ def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally
             decoder_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         adapter_info = handshake_with_adapter(proc)
+        _validate_adapter_supports(adapter_info, code_ids)
         print(
             f"[harness] handshake ok — adapter: {adapter_info.get('name', '?')} "
             f"(supports: {adapter_info.get('supports_codes', '?')})",
@@ -1255,21 +1405,9 @@ def run_harness(  # noqa: PLR0912, PLR0915 — orchestrator: tier/probes/finally
                 error_patterns = probe_error_patterns(proc, code_id=1)
                 saturation_stress = probe_saturation_stress(proc, code_id=1)
         finally:
-            assert proc.stdin is not None
-            proc.stdin.close()
-            try:
-                rc = proc.wait(timeout=10)
-                if rc != 0:
-                    print(
-                        f"[harness] adapter exited with code {rc}",
-                        file=sys.stderr,
-                    )
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                print(
-                    "[harness] adapter wait timeout — killed",
-                    file=sys.stderr,
-                )
+            rc = _close_adapter(proc, wait_s=10.0)
+            if rc is not None and rc != 0:
+                print(f"[harness] adapter exited with code {rc}", file=sys.stderr)
     elapsed_s = time.time() - t0
 
     return build_algo_card(
