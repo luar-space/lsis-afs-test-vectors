@@ -87,7 +87,7 @@ The card's `methodology` block MUST report:
 
 ```json
 "methodology": {
-  "seeds": [42, 137, 313],
+  "seeds": [7, 99, 271],
   "message_ensemble": "uniform_random",
   "ci_method": "wilson_95"
 }
@@ -95,7 +95,7 @@ The card's `methodology` block MUST report:
 
 | Field | Value | Notes |
 |---|---|---|
-| `seeds` | `[42, 137, 313]` | Three fixed integer seeds for the RNG. Every grid point is measured across all three; aggregate counts feed CI computation. |
+| `seeds` | `[7, 99, 271]` | Three fixed integer seeds for the RNG. Every grid point is measured across all three; aggregate counts feed CI computation. |
 | `message_ensemble` | `"uniform_random"` | Random info bits sampled uniformly. **All-zero codeword shortcut is forbidden** — under finite max-iters it over-reports relative to operational performance. |
 | `ci_method` | `"wilson_95"` | Wilson score 95% confidence interval on the binomial frame-error count. Half-widths reported per grid point. |
 
@@ -295,7 +295,7 @@ implement the production version without comments.
 
   // ─── Methodology ──────────────────────────────────────────────────
   "methodology": {
-    "seeds":            [42, 137, 313],
+    "seeds":            [7, 99, 271],
     "message_ensemble": "uniform_random",
     "ci_method":        "wilson_95"
   },
@@ -409,7 +409,7 @@ The validator enforces:
 
 1. All top-level required fields present.
 2. `tier ∈ {core, extended, full}`.
-3. `methodology` fields exactly match the pinned values (seeds = [42,137,313], message_ensemble = "uniform_random", ci_method = "wilson_95").
+3. `methodology` fields exactly match the pinned values (seeds = [7,99,271], message_ensemble = "uniform_random", ci_method = "wilson_95").
 4. `channel.model == "BPSK-AWGN"`; `channel.sigma_formula`, `channel.llr_formula` present.
 5. `operating_point.system_es_n0_db == 0.0`.
 6. LDPC `eb_n0_grid_db` matches the pinned 12-point LDPC grid exactly.

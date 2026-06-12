@@ -179,7 +179,7 @@ is the full-tier exemplar.
 🟡 **SB1/BCH side** — characterized today in
 `cpp/tests/performance/test_bch_ber.cpp` (Catch2 unit test, runs under
 `task ber`). Same methodology as the LDPC side (BPSK-AWGN,
-σ²=1/(2·R·Eb/N0), seeds {42,137,313}, Wilson CI), but emits stdout text,
+σ²=1/(2·R·Eb/N0), seeds {7,99,271}, Wilson CI), but emits stdout text,
 not JSON, and grid is 6 anchors {2.0, 3.0, 4.0, 5.0, 6.0, 7.6} dB (R=9/52).
 **Buildable-spec gap:** lift the simulation core into a standalone
 `scripts/bch_characterise.cpp` modelled on `ldpc_characterise.cpp` so both
@@ -261,7 +261,7 @@ comparable with a `full` one.
 
   // ─── Methodology (lifted from C++) ────────────────────────────────
   "methodology": {
-    "seeds":            [42, 137, 313],
+    "seeds":            [7, 99, 271],
     "message_ensemble": "uniform_random",
     "ci_method":        "wilson_95"
   },

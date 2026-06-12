@@ -11,7 +11,7 @@ V2 scope:
   - `perf_card run --decoder <cmd> [--codes SF2,SF3,SB1] [--frames-per-seed N]
     [--out FILE]` runs the full characterisation
   - Real codewords via `lunalink.afs.{ldpc_encode, bch_encode}` Python bindings
-  - Pinned methodology: seeds {42, 137, 313}, uniform_random messages,
+  - Pinned methodology: seeds {7, 99, 271}, uniform_random messages,
     σ=1/√(2·R·Eb/N0), L=2y/σ², Wilson 95% CI
   - Algo card JSON emission matching the unified schema's `ldpc:` +
     `sb1:` blocks (tier-core fields; extended/full blocks deferred to a
@@ -138,6 +138,17 @@ LDPC_CLIFF_FRAMES_FACTOR = 3
 LDPC_CLIFF_EB_N0_MIN = 1.4
 LDPC_CLIFF_EB_N0_MAX = 2.0
 
+# Bump frame count across the BCH cliff zone (3.0–5.0 dB inclusive).
+# At baseline 5000 frames/seed × 3 = 15000 frames per point, points
+# above the 3.0 dB cliff hit small frame_error counts (1–25 events)
+# producing ±20–100% Wilson CI half-widths — visible non-smoothness
+# on the waterfall. 5× brings it into ±5–25% range across the
+# visible cliff descent. Does NOT affect the verdict (which lives at
+# the 7.6 dB op point) — purely waterfall presentation quality.
+BCH_CLIFF_FRAMES_FACTOR = 5
+BCH_CLIFF_EB_N0_MIN = 3.0
+BCH_CLIFF_EB_N0_MAX = 5.0
+
 CODES = {
     0: {
         "name": "SB1",
@@ -167,7 +178,7 @@ CODES = {
 CODE_BY_NAME = {meta["name"]: cid for cid, meta in CODES.items()}
 
 # Standard's pinned methodology.
-SEEDS = (42, 137, 313)
+SEEDS = (7, 99, 271)
 DEFAULT_MAX_ITERS = 50
 DEFAULT_FRAMES_PER_SEED = 5000  # matches lunalink LDPC characterise
 
@@ -679,11 +690,18 @@ def sweep_one_grid_point(
     sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
     sigma_sq = sigma * sigma
     pt = GridPoint(eb_n0_db=eb_n0_db)
-    # BCH bumps the operating point's frame count for tighter CI on the
-    # verdict. LDPC bumps the cliff zone (1.4–2.0 dB) where the curve
-    # would otherwise show visible Poisson noise on small error counts.
+    # Frame-count bumps:
+    #   - BCH op point (7.6 dB): tighter CI on the verdict claim.
+    #   - BCH cliff zone (3.0–5.0 dB): smooths the visible waterfall —
+    #     points above the cliff hit small frame_error counts which
+    #     produce wide Wilson CIs.
+    #   - LDPC cliff zone (1.4–2.0 dB): same rationale — smooths the
+    #     cliff transition where the curve would otherwise show
+    #     visible Poisson noise on small error counts.
     if code_id == 0 and abs(eb_n0_db - BCH_OPERATING_EB_N0) < 1e-6:
         this_frames = frames_per_seed * BCH_OPERATING_FRAMES_FACTOR
+    elif code_id == 0 and BCH_CLIFF_EB_N0_MIN - 1e-6 <= eb_n0_db <= BCH_CLIFF_EB_N0_MAX + 1e-6:
+        this_frames = frames_per_seed * BCH_CLIFF_FRAMES_FACTOR
     elif (
         code_id in (1, 2) and LDPC_CLIFF_EB_N0_MIN - 1e-6 <= eb_n0_db <= LDPC_CLIFF_EB_N0_MAX + 1e-6
     ):
