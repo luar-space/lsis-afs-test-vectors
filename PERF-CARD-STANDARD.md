@@ -144,16 +144,19 @@ Per-code Eb/N0 grids and default frame counts:
 
 | code_id | Name | k | n | rate R | Eb/N0 grid (dB) | Default frames/seed |
 |---|---|---|---|---|---|---|
-| 0 | **SB1** (BCH) | 9 | 52 | 9/52 ≈ 0.173 | 2.0, 2.5, **3.0, 3.25, 3.5, 3.75, 4.0**, 4.5, 5.0, 6.0, **7.6** | 3000 (10000 at 7.6 dB op point) |
+| 0 | **SB1** (BCH) | 9 | 52 | 9/52 ≈ 0.173 | 2.0, 2.5, **2.6, 2.7, 2.8, 2.9, 3.0**, 3.25, 3.5, 3.75, 4.0, 4.5, 5.0, 6.0, **7.6** | 3000 (10000 at 7.6 dB op point) |
 | 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, **1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0**, 2.25, 2.5, 2.75, 3.0 | 5000 (15000 in cliff zone 1.4–2.0 dB) |
 | 2 | **SF3** (LDPC, applies to SF3+SF4) | 870 | 1740 | 1/2 | same as SF2 | 5000 (15000 in cliff zone 1.4–2.0 dB) |
 
 The LDPC grid uses **0.05 dB** spacing across the cliff zone (1.4–2.0 dB,
 bold above) — publication-grade resolution matching DVB-S2, 3GPP TR
 38.802, and IEEE-published LDPC reference curves. The BCH grid uses
-**0.25 dB** across the cliff zone (3.0–4.0 dB, bold). Outside the cliff
-zones the grid is coarser (0.2–1.0 dB) because the curves are steep and
-finer resolution would not reveal additional structure.
+**0.1 dB** across the bar-crossing zone (2.6–3.0 dB, bold above), then
+0.25 dB across the post-bar descent (3.0–4.0 dB), then 0.5–1.0 dB into
+the floor. The 0.1 dB spacing at the BCH bar crossing is necessary
+because the BCH waterfall has a relatively shallow slope there
+(~0.7 log₁₀(FER) per dB), so coarse spacing would either miss the
+true crossing or land it on a grid point ~0.4 dB above the actual one.
 
 Operating-point Eb/N0 derives from Es/N0 via the code rate:
 `Es/N0 [dB] = Eb/N0 [dB] + 10·log10(R)`, so
@@ -368,7 +371,7 @@ implement the production version without comments.
     "frame_error_definition":
       "decoded FID != transmitted OR decoded TOI != transmitted",
     "frames_per_seed_default": 5000,   // per-seed; 3× at the operating point
-    "eb_n0_grid_db": [2.0, 2.5, 3.0, 3.25, 3.5, 3.75, 4.0, 4.5, 5.0, 6.0, 7.6],
+    "eb_n0_grid_db": [2.0, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.25, 3.5, 3.75, 4.0, 4.5, 5.0, 6.0, 7.6],
     "waterfall": [
       {"eb_n0_db": 2.0, "fer": 0.023, "ci_fer": 0.0024,
        "frame_errors": 352, "frames": 15000}

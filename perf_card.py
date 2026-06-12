@@ -106,15 +106,24 @@ LDPC_GRID = (
 )
 BCH_GRID = (
     2.0,
-    2.5,  # below cliff (0.5 dB)
+    2.5,
+    # Bar-crossing zone — 0.1 dB resolution. Coarse spacing here would
+    # report the cliff at the next grid point below the bar (artificially
+    # high), missing the true crossing which lives in this interval.
+    2.6,
+    2.7,
+    2.8,
+    2.9,
+    # Cliff descent (0.25 dB) — past the bar, into the floor.
     3.0,
     3.25,
     3.5,
     3.75,
-    4.0,  # cliff zone (0.25 dB)
+    4.0,
+    # Above cliff (0.5–1.0 dB) — Wilson upper bound regime.
     4.5,
     5.0,
-    6.0,  # above cliff (0.5–1.0 dB)
+    6.0,
     7.6,  # spec operating point
 )
 
@@ -154,7 +163,7 @@ LDPC_CLIFF_EB_N0_MAX = 3.0  # extends through the tail-to-spec range so the
 # had fewer frames and the resulting upper-bound jumped above 5.0
 # dB's, producing a visually misleading "band going up" artefact.
 BCH_CLIFF_FRAMES_FACTOR = 5
-BCH_CLIFF_EB_N0_MIN = 3.0
+BCH_CLIFF_EB_N0_MIN = 2.5  # cover the bar-crossing zone (2.5–3.0 dB)
 BCH_CLIFF_EB_N0_MAX = 6.0
 
 CODES = {

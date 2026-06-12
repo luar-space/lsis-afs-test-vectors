@@ -2,12 +2,12 @@
   "schema_version": "1.0.0",
   "tier": "core",
   "produced_by": "lsis-afs perf_card V2",
-  "produced_at": "2026-06-12T20:37:11Z",
+  "produced_at": "2026-06-12T21:25:44Z",
   "reference_anchor": {
     "repo": "luar-space/lsis-afs-test-vectors",
     "tag": "v0.7.0"
   },
-  "elapsed_seconds": 2036.4,
+  "elapsed_seconds": 1449.5,
   "operating_point": {
     "system_es_n0_db": 0.0,
     "notes": "LSIS spec SNR >= 0 dB. Each code's Eb/N0 derives via its rate."
@@ -754,6 +754,10 @@
     "eb_n0_grid_db": [
       2.0,
       2.5,
+      2.6,
+      2.7,
+      2.8,
+      2.9,
       3.0,
       3.25,
       3.5,
@@ -774,10 +778,38 @@
       },
       {
         "eb_n0_db": 2.5,
-        "fer": 0.0122,
-        "ci_fer": 0.0017610199880330603,
-        "frame_errors": 183,
-        "frames": 15000
+        "fer": 0.011773333333333334,
+        "ci_fer": 0.0007723605149031343,
+        "frame_errors": 883,
+        "frames": 75000
+      },
+      {
+        "eb_n0_db": 2.6,
+        "fer": 0.009973333333333334,
+        "ci_fer": 0.0007115873887269136,
+        "frame_errors": 748,
+        "frames": 75000
+      },
+      {
+        "eb_n0_db": 2.7,
+        "fer": 0.00816,
+        "ci_fer": 0.0006443359767550284,
+        "frame_errors": 612,
+        "frames": 75000
+      },
+      {
+        "eb_n0_db": 2.8,
+        "fer": 0.00736,
+        "ci_fer": 0.0006122351514585586,
+        "frame_errors": 552,
+        "frames": 75000
+      },
+      {
+        "eb_n0_db": 2.9,
+        "fer": 0.00664,
+        "ci_fer": 0.0005817839431979868,
+        "frame_errors": 498,
+        "frames": 75000
       },
       {
         "eb_n0_db": 3.0,
@@ -850,8 +882,8 @@
       "ci_fer": 2.560935492136179e-05,
       "ci_fer_upper": 5.121870984272358e-05,
       "pass": true,
-      "first_bar_crossing_eb_n0_db": 3.0,
-      "margin_below_spec_db": 4.6
+      "first_bar_crossing_eb_n0_db": 2.6,
+      "margin_below_spec_db": 5.0
     }
   }
 }
