@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lsis-afs-test-vectors"
-version = "0.6.0"
-description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5 + FEC components). v0.6.0 ships Level 1 spreading codes (210 PRNs), Level 2 encoded frames (5 standard test messages + 2 boundary frames) plus their canonical pre-encode SB2/SB3/SB4 input bytes, Level 3 baseband I/Q signals (10 × 12 s @ 10.23 MHz, gzipped) generated from the matching L2 frames, Level 4 cross-decode outputs produced by PocketSDR-AFS @ pinned SHA from those signals (10 × 6000 symbols, byte-exact equal to the L2 frame payloads, closing the receive-side loop), and Level 5 parsed JSONs (7 × interop-PDF spec-shaped JSON, produced by the LunaLink reference implementation, with V1.0-pinned fields FID/TOI/WN/ITOW/ToT/CRC carried as values and V1.0-TBW regions surfaced as raw bit-slices with explicit LSIS-TBW markers), and Phase-3 FEC component vectors (full byte-exact-diffable BCH(51,8), CRC-24Q, 60×98 interleaver, and LDPC(1/2) SF2/SF3/SF4 encode/decode pairs). Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (L1+L2 independent), the LSIS V1.0 §2.4 structural rules, a first-chip polarity oracle (L3 structural), PocketSDR-AFS (L4 cross-decode), and a stdlib JSON-shape + spec-range + ToT round-trip + raw-data byte-equal vs inputs/ check (L5 structural)."
+version = "0.7.0"
+description = "Staged LSIS-AFS interoperability test-vector package (Levels 1–5 + FEC components) plus the perf-card decoder benchmarking harness. Levels 1–5: spreading codes (210 PRNs), encoded frames (5 standard test messages + 2 boundary frames) plus canonical pre-encode SB2/SB3/SB4 input bytes, baseband I/Q signals (10 × 12 s @ 10.23 MHz), PocketSDR-AFS cross-decode outputs byte-exact-equal to the L2 frame payloads, and parsed nav-data JSONs in the interop-PDF spec shape. Phase-3 FEC component vectors: byte-exact-diffable BCH(51,8), CRC-24Q, 60×98 interleaver, and LDPC(1/2) SF2/SF3/SF4 encode/decode pairs. Perf-card (v0.7.0): a reproducible FEC decoder performance benchmark with run/validate/compare/self-test/leaderboard subcommands, a binary stdio adapter contract, shipped reference codeword pool, and adapter templates in Python and C — turns characterising any LDPC/BCH decoder against the LSIS-AFS standard into a single command. Validated against LNIS AD1 Volume A Annex 3, LANS-AFS-SIM (L1+L2 independent), the LSIS V1.0 §2.4 structural rules, a first-chip polarity oracle (L3 structural), PocketSDR-AFS (L4 cross-decode), and a stdlib JSON-shape + spec-range + ToT round-trip + raw-data byte-equal vs inputs/ check (L5 structural)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-keywords = ["LSIS-AFS", "LunaNet", "PNT", "GNSS", "spreading-codes", "CCSDS", "ESA", "interoperability", "test-vectors"]
+keywords = ["LSIS-AFS", "LunaNet", "PNT", "GNSS", "spreading-codes", "CCSDS", "ESA", "interoperability", "test-vectors", "LDPC", "BCH", "decoder-benchmark"]
 authors = [{ name = "Marco Fiscato" }]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -24,10 +24,21 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = []
+# numpy is now required (perf_card.py uses it heavily; validate.py's L3
+# fast path also uses it). Promoted from the previous [fast] optional dep.
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+# matplotlib is needed only for `perf-card render` (pretty waterfall +
+# verdict figures). Keeps the core harness lean for adopters who just
+# want run/validate/compare/leaderboard.
+render = ["matplotlib>=3.6"]
 
 [project.scripts]
 lsis-afs-validate = "validate:main"
+perf-card = "perf_card:main"
 
 [project.urls]
 Repository = "https://github.com/luar-space/lsis-afs-test-vectors"
@@ -36,6 +47,11 @@ Issues = "https://github.com/luar-space/lsis-afs-test-vectors/issues"
 [tool.hatch.build.targets.wheel]
 only-include = [
     "validate.py",
+    "perf_card.py",
+    "perf_card_mock_adapter.py",
+    "perf_card_reference_card.json",
+    "perf_card_reference_codewords.npz",
+    "perf_card_templates",
     "codes",
     "frames",
     "inputs",
@@ -46,12 +62,18 @@ only-include = [
     "CORRECTNESS.md",
     "CHANGELOG.md",
     "INTEROP-ROUNDROBIN.md",
+    "PERF-CARD-STANDARD.md",
     "CITATION.cff",
 ]
 
 [tool.hatch.build.targets.sdist]
 only-include = [
     "validate.py",
+    "perf_card.py",
+    "perf_card_mock_adapter.py",
+    "perf_card_reference_card.json",
+    "perf_card_reference_codewords.npz",
+    "perf_card_templates",
     "codes",
     "frames",
     "inputs",
@@ -62,25 +84,20 @@ only-include = [
     "CORRECTNESS.md",
     "CHANGELOG.md",
     "INTEROP-ROUNDROBIN.md",
+    "PERF-CARD-STANDARD.md",
     "CITATION.cff",
     "LICENSE",
     "pyproject.toml",
     "tests",
+    "tools",
     ".github/workflows/verify.yml",
+    ".github/workflows/perf_card.yml",
 ]
-
-[project.optional-dependencies]
-# Optional speedup for `check-signals` (L3 full-range scan): the stdlib path
-# uses bytes.count over a 982 MB payload (~3 s per file). With numpy installed,
-# the same check runs as a vectorised uint32 mask (~0.3 s per file).
-fast = ["numpy>=1.20"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
-    # CI gets the fast path; end-users opt in via `pip install ...[fast]`.
-    "numpy>=1.20",
 ]
 
 [tool.ruff]
