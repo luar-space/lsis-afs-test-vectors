@@ -145,7 +145,7 @@ Per-code Eb/N0 grids and default frame counts:
 | code_id | Name | k | n | rate R | Eb/N0 grid (dB) | Default frames/seed |
 |---|---|---|---|---|---|---|
 | 0 | **SB1** (BCH) | 9 | 52 | 9/52 ≈ 0.173 | 2.0, 3.0, 4.0, 5.0, 6.0, **7.6** | 3000 (10000 at 7.6 dB op point) |
-| 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0 | 5000 |
+| 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0 | 5000 |
 | 2 | **SF3** (LDPC, applies to SF3+SF4) | 870 | 1740 | 1/2 | same as SF2 | 5000 |
 
 Operating-point Eb/N0 derives from Es/N0 via the code rate:
@@ -213,15 +213,16 @@ ascending (lower = better implementation). The PASS/FAIL outcome stays
 as the conformance gate; the cliff position is the discriminator.
 
 **Grid resolution caveat.** `first_bar_crossing_eb_n0_db` is reported
-to grid resolution — not interpolated. The LDPC grid has 0.1–0.2 dB
-spacing around the cliff (1.0–1.6 dB), the BCH grid has 1.0 dB spacing
-throughout. Two implementations whose true cliffs differ by less than
-the local grid step typically report the same value (tied at the
-grid's resolution); a 0.1 dB reported difference on the LDPC grid is
-real; a 1.0 dB reported difference on the BCH grid may overstate the
-true gap by up to a grid step. Tied cards on the leaderboard are
-indistinguishable at the grid's resolution — no extra CI-overlap test
-is applied to a derived discrete quantity.
+to grid resolution — not interpolated. The LDPC grid has 0.1 dB
+spacing across the entire cliff region (1.0–2.0 dB) and 0.2 dB at
+1.4→1.6; the BCH grid has 1.0 dB spacing throughout. Two
+implementations whose true cliffs differ by less than the local grid
+step typically report the same value (tied at the grid's resolution);
+a 0.1 dB reported difference on the LDPC grid is real; a 1.0 dB
+reported difference on the BCH grid may overstate the true gap by up
+to a grid step. Tied cards on the leaderboard are indistinguishable
+at the grid's resolution — no extra CI-overlap test is applied to a
+derived discrete quantity.
 
 The leaderboard also surfaces the **frame count at the cliff row**
 (`n@cliff` column) — readers should treat low-frame submissions
@@ -305,7 +306,7 @@ implement the production version without comments.
           "spec_ref": "LSIS V1.0 §2.4.3.1.2"
         },
         "frames_per_seed": 5000,
-        "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0],
+        "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0],
         "waterfall": [
           {"eb_n0_db": 0.2, "fer": 0.9607, "ber": 0.479,
            "ci_fer": 0.0031, "ci_ber": 0.00023,

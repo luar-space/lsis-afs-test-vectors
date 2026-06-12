@@ -63,7 +63,7 @@ import numpy as np
 # ─── Code metadata ───────────────────────────────────────────────────────
 
 # Pinned Eb/N0 grids — matching lunalink's ldpc_characterise / bch_characterise.
-LDPC_GRID = (0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0, 3.0)
+LDPC_GRID = (0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0)
 BCH_GRID = (2.0, 3.0, 4.0, 5.0, 6.0, 7.6)
 
 # Per-grid-point frames_per_seed override (BCH bumps at the operating point
