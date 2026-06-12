@@ -2,12 +2,12 @@
   "schema_version": "1.0.0",
   "tier": "core",
   "produced_by": "lsis-afs perf_card V2",
-  "produced_at": "2026-06-12T09:06:00Z",
+  "produced_at": "2026-06-12T10:36:57Z",
   "reference_anchor": {
     "repo": "luar-space/lsis-afs-test-vectors",
     "tag": "v0.7.0"
   },
-  "elapsed_seconds": 871.8,
+  "elapsed_seconds": 4634.3,
   "operating_point": {
     "system_es_n0_db": 0.0,
     "notes": "LSIS spec SNR >= 0 dB. Each code's Eb/N0 derives via its rate."
@@ -51,11 +51,21 @@
           1.2,
           1.3,
           1.4,
+          1.45,
+          1.5,
+          1.55,
           1.6,
+          1.65,
           1.7,
+          1.75,
           1.8,
+          1.85,
           1.9,
+          1.95,
           2.0,
+          2.25,
+          2.5,
+          2.75,
           3.0
         ],
         "waterfall": [
@@ -157,54 +167,162 @@
           },
           {
             "eb_n0_db": 1.4,
-            "fer": 0.0008666666666666666,
-            "ber": 0.00043516666666666666,
-            "ci_fer": 0.0004878959505789963,
-            "ci_ber": 9.635619798210815e-06,
-            "frames": 15000,
-            "frame_errors": 13,
-            "bit_errors": 7833,
-            "total_bits": 18000000,
-            "not_converged": 13
+            "fer": 0.0007555555555555555,
+            "ber": 0.0003784814814814815,
+            "ci_fer": 0.0002574157181911736,
+            "ci_ber": 5.18811368278e-06,
+            "frames": 45000,
+            "frame_errors": 34,
+            "bit_errors": 20438,
+            "total_bits": 54000000,
+            "not_converged": 34
+          },
+          {
+            "eb_n0_db": 1.45,
+            "fer": 0.0002666666666666667,
+            "ber": 0.00013244444444444444,
+            "ci_fer": 0.00015676967756023564,
+            "ci_ber": 3.0695621638787885e-06,
+            "frames": 45000,
+            "frame_errors": 12,
+            "bit_errors": 7152,
+            "total_bits": 54000000,
+            "not_converged": 12
+          },
+          {
+            "eb_n0_db": 1.5,
+            "fer": 0.00015555555555555556,
+            "ber": 7.633333333333334e-05,
+            "ci_fer": 0.00012286953769881335,
+            "ci_ber": 2.330506347070638e-06,
+            "frames": 45000,
+            "frame_errors": 7,
+            "bit_errors": 4122,
+            "total_bits": 54000000,
+            "not_converged": 7
+          },
+          {
+            "eb_n0_db": 1.55,
+            "fer": 6.666666666666667e-05,
+            "ber": 3.288888888888889e-05,
+            "ci_fer": 8.666925105167621e-05,
+            "ci_ber": 1.5300091125306663e-06,
+            "frames": 45000,
+            "frame_errors": 3,
+            "bit_errors": 1776,
+            "total_bits": 54000000,
+            "not_converged": 3
           },
           {
             "eb_n0_db": 1.6,
             "fer": 6.666666666666667e-05,
-            "ber": 3.3444444444444443e-05,
-            "ci_fer": 0.00018290204579429458,
-            "ci_ber": 2.673748893357447e-06,
-            "frames": 15000,
-            "frame_errors": 1,
-            "bit_errors": 602,
-            "total_bits": 18000000,
-            "not_converged": 1
+            "ber": 3.287037037037037e-05,
+            "ci_fer": 8.666925105167621e-05,
+            "ci_ber": 1.5295785531060896e-06,
+            "frames": 45000,
+            "frame_errors": 3,
+            "bit_errors": 1775,
+            "total_bits": 54000000,
+            "not_converged": 3
+          },
+          {
+            "eb_n0_db": 1.65,
+            "fer": 4.4444444444444447e-05,
+            "ber": 2.303703703703704e-05,
+            "ci_fer": 7.493335220279324e-05,
+            "ci_ber": 1.2806635555160666e-06,
+            "frames": 45000,
+            "frame_errors": 2,
+            "bit_errors": 1244,
+            "total_bits": 54000000,
+            "not_converged": 2
           },
           {
             "eb_n0_db": 1.7,
             "fer": 0.0,
             "ber": 0.0,
-            "ci_fer": 0.0001280205464179254,
-            "ci_ber": 1.067110883365935e-07,
-            "frames": 15000,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
             "frame_errors": 0,
             "bit_errors": 0,
-            "total_bits": 18000000,
+            "total_bits": 54000000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 1.75,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 54000000,
             "not_converged": 0
           },
           {
             "eb_n0_db": 1.8,
             "fer": 0.0,
             "ber": 0.0,
-            "ci_fer": 0.0001280205464179254,
-            "ci_ber": 1.067110883365935e-07,
-            "frames": 15000,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
             "frame_errors": 0,
             "bit_errors": 0,
-            "total_bits": 18000000,
+            "total_bits": 54000000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 1.85,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 54000000,
             "not_converged": 0
           },
           {
             "eb_n0_db": 1.9,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 54000000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 1.95,
+            "fer": 2.2222222222222223e-05,
+            "ber": 1.0962962962962963e-05,
+            "ci_fer": 6.097844837546418e-05,
+            "ci_ber": 8.838381615658353e-07,
+            "frames": 45000,
+            "frame_errors": 1,
+            "bit_errors": 592,
+            "total_bits": 54000000,
+            "not_converged": 1
+          },
+          {
+            "eb_n0_db": 2.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 3.5570367839868056e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 54000000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.25,
             "fer": 0.0,
             "ber": 0.0,
             "ci_fer": 0.0001280205464179254,
@@ -216,7 +334,19 @@
             "not_converged": 0
           },
           {
-            "eb_n0_db": 2.0,
+            "eb_n0_db": 2.5,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0001280205464179254,
+            "ci_ber": 1.067110883365935e-07,
+            "frames": 15000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 18000000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.75,
             "fer": 0.0,
             "ber": 0.0,
             "ci_fer": 0.0001280205464179254,
@@ -247,8 +377,8 @@
           "ci_ber": 1.067110883365935e-07,
           "ci_ber_upper": 2.13422176673187e-07,
           "pass": true,
-          "first_bar_crossing_eb_n0_db": 1.7,
-          "margin_below_spec_db": 1.3
+          "first_bar_crossing_eb_n0_db": 2.0,
+          "margin_below_spec_db": 1.0
         }
       },
       "SF3_SF4": {
@@ -273,11 +403,21 @@
           1.2,
           1.3,
           1.4,
+          1.45,
+          1.5,
+          1.55,
           1.6,
+          1.65,
           1.7,
+          1.75,
           1.8,
+          1.85,
           1.9,
+          1.95,
           2.0,
+          2.25,
+          2.5,
+          2.75,
           3.0
         ],
         "waterfall": [
@@ -379,54 +519,162 @@
           },
           {
             "eb_n0_db": 1.4,
-            "fer": 0.0038,
-            "ber": 0.0019029885057471265,
-            "ci_fer": 0.0009926731635275855,
-            "ci_ber": 2.364631993932598e-05,
-            "frames": 15000,
-            "frame_errors": 57,
-            "bit_errors": 24834,
-            "total_bits": 13050000,
-            "not_converged": 57
+            "fer": 0.0038888888888888888,
+            "ber": 0.0019466666666666666,
+            "ci_fer": 0.0005765971261830058,
+            "ci_ber": 1.3807516097277124e-05,
+            "frames": 45000,
+            "frame_errors": 175,
+            "bit_errors": 76212,
+            "total_bits": 39150000,
+            "not_converged": 175
+          },
+          {
+            "eb_n0_db": 1.45,
+            "fer": 0.002511111111111111,
+            "ber": 0.001247381864623244,
+            "ci_fer": 0.0004643464253947904,
+            "ci_ber": 1.1056638222095423e-05,
+            "frames": 45000,
+            "frame_errors": 113,
+            "bit_errors": 48835,
+            "total_bits": 39150000,
+            "not_converged": 113
+          },
+          {
+            "eb_n0_db": 1.5,
+            "fer": 0.0011777777777777778,
+            "ber": 0.0005787994891443167,
+            "ci_fer": 0.0003197368701633134,
+            "ci_ber": 7.534209678074773e-06,
+            "frames": 45000,
+            "frame_errors": 53,
+            "bit_errors": 22660,
+            "total_bits": 39150000,
+            "not_converged": 52
+          },
+          {
+            "eb_n0_db": 1.55,
+            "fer": 0.0008666666666666666,
+            "ber": 0.0004348403575989783,
+            "ci_fer": 0.0002751931683464479,
+            "ci_ber": 6.530897654010968e-06,
+            "frames": 45000,
+            "frame_errors": 39,
+            "bit_errors": 17024,
+            "total_bits": 39150000,
+            "not_converged": 39
           },
           {
             "eb_n0_db": 1.6,
-            "fer": 0.0006,
-            "ber": 0.0003006896551724138,
-            "ci_fer": 0.00041216796404989586,
-            "ci_ber": 9.408010290496208e-06,
-            "frames": 15000,
-            "frame_errors": 9,
-            "bit_errors": 3924,
-            "total_bits": 13050000,
-            "not_converged": 9
+            "fer": 0.00044444444444444447,
+            "ber": 0.00022286079182630907,
+            "ci_fer": 0.00019934904510970718,
+            "ci_ber": 4.676085975030494e-06,
+            "frames": 45000,
+            "frame_errors": 20,
+            "bit_errors": 8725,
+            "total_bits": 39150000,
+            "not_converged": 20
+          },
+          {
+            "eb_n0_db": 1.65,
+            "fer": 0.0002666666666666667,
+            "ber": 0.00013312899106002554,
+            "ci_fer": 0.00015676967756023564,
+            "ci_ber": 3.614411289451205e-06,
+            "frames": 45000,
+            "frame_errors": 12,
+            "bit_errors": 5212,
+            "total_bits": 39150000,
+            "not_converged": 12
           },
           {
             "eb_n0_db": 1.7,
-            "fer": 6.666666666666667e-05,
-            "ber": 3.371647509578544e-05,
-            "ci_fer": 0.00018290204579429458,
-            "ci_ber": 3.1538273941945167e-06,
-            "frames": 15000,
-            "frame_errors": 1,
-            "bit_errors": 440,
-            "total_bits": 13050000,
-            "not_converged": 1
+            "fer": 0.00013333333333333334,
+            "ber": 6.549169859514687e-05,
+            "ci_fer": 0.00011489433707124922,
+            "ci_ber": 2.53542272221157e-06,
+            "frames": 45000,
+            "frame_errors": 6,
+            "bit_errors": 2564,
+            "total_bits": 39150000,
+            "not_converged": 6
+          },
+          {
+            "eb_n0_db": 1.75,
+            "fer": 0.00011111111111111112,
+            "ber": 5.399744572158365e-05,
+            "ci_fer": 0.0001063221979983741,
+            "ci_ber": 2.302309269473557e-06,
+            "frames": 45000,
+            "frame_errors": 5,
+            "bit_errors": 2114,
+            "total_bits": 39150000,
+            "not_converged": 5
           },
           {
             "eb_n0_db": 1.8,
-            "fer": 6.666666666666667e-05,
-            "ber": 3.586206896551724e-05,
-            "ci_fer": 0.00018290204579429458,
-            "ci_ber": 3.2524134326685047e-06,
-            "frames": 15000,
+            "fer": 2.2222222222222223e-05,
+            "ber": 1.1954022988505747e-05,
+            "ci_fer": 6.097844837546418e-05,
+            "ci_ber": 1.0841509573076229e-06,
+            "frames": 45000,
             "frame_errors": 1,
             "bit_errors": 468,
-            "total_bits": 13050000,
+            "total_bits": 39150000,
             "not_converged": 1
           },
           {
+            "eb_n0_db": 1.85,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 4.9062575006927506e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 39150000,
+            "not_converged": 0
+          },
+          {
             "eb_n0_db": 1.9,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 4.9062575006927506e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 39150000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 1.95,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 4.9062575006927506e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 39150000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.0,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 4.2680800831900534e-05,
+            "ci_ber": 4.9062575006927506e-08,
+            "frames": 45000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 39150000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.25,
             "fer": 0.0,
             "ber": 0.0,
             "ci_fer": 0.0001280205464179254,
@@ -438,7 +686,19 @@
             "not_converged": 0
           },
           {
-            "eb_n0_db": 2.0,
+            "eb_n0_db": 2.5,
+            "fer": 0.0,
+            "ber": 0.0,
+            "ci_fer": 0.0001280205464179254,
+            "ci_ber": 1.47187696135153e-07,
+            "frames": 15000,
+            "frame_errors": 0,
+            "bit_errors": 0,
+            "total_bits": 13050000,
+            "not_converged": 0
+          },
+          {
+            "eb_n0_db": 2.75,
             "fer": 0.0,
             "ber": 0.0,
             "ci_fer": 0.0001280205464179254,
@@ -469,8 +729,8 @@
           "ci_ber": 1.47187696135153e-07,
           "ci_ber_upper": 2.94375392270306e-07,
           "pass": true,
-          "first_bar_crossing_eb_n0_db": 1.9,
-          "margin_below_spec_db": 1.1
+          "first_bar_crossing_eb_n0_db": 1.85,
+          "margin_below_spec_db": 1.15
         }
       }
     }
@@ -493,8 +753,13 @@
     "frames_per_seed_default": 5000,
     "eb_n0_grid_db": [
       2.0,
+      2.5,
       3.0,
+      3.25,
+      3.5,
+      3.75,
       4.0,
+      4.5,
       5.0,
       6.0,
       7.6
@@ -508,6 +773,13 @@
         "frames": 15000
       },
       {
+        "eb_n0_db": 2.5,
+        "fer": 0.011933333333333334,
+        "ci_fer": 0.0017420041906249426,
+        "frame_errors": 179,
+        "frames": 15000
+      },
+      {
         "eb_n0_db": 3.0,
         "fer": 0.005666666666666667,
         "ci_fer": 0.001207765555728051,
@@ -515,10 +787,38 @@
         "frames": 15000
       },
       {
+        "eb_n0_db": 3.25,
+        "fer": 0.0032,
+        "ci_fer": 0.0009126279556102934,
+        "frame_errors": 48,
+        "frames": 15000
+      },
+      {
+        "eb_n0_db": 3.5,
+        "fer": 0.0021333333333333334,
+        "ci_fer": 0.0007492031968889089,
+        "frame_errors": 32,
+        "frames": 15000
+      },
+      {
+        "eb_n0_db": 3.75,
+        "fer": 0.0016666666666666668,
+        "ci_fer": 0.000665059478649248,
+        "frame_errors": 25,
+        "frames": 15000
+      },
+      {
         "eb_n0_db": 4.0,
         "fer": 0.0013333333333333333,
         "ci_fer": 0.0005976913142072537,
         "frame_errors": 20,
+        "frames": 15000
+      },
+      {
+        "eb_n0_db": 4.5,
+        "fer": 0.00013333333333333334,
+        "ci_fer": 0.00022475493558148243,
+        "frame_errors": 2,
         "frames": 15000
       },
       {

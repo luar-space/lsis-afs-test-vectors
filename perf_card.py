@@ -62,9 +62,61 @@ import numpy as np
 
 # ─── Code metadata ───────────────────────────────────────────────────────
 
-# Pinned Eb/N0 grids — matching lunalink's ldpc_characterise / bch_characterise.
-LDPC_GRID = (0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0)
-BCH_GRID = (2.0, 3.0, 4.0, 5.0, 6.0, 7.6)
+# Pinned Eb/N0 grids — NASA-grade / publication-tier:
+#   - LDPC: 0.05 dB across the entire cliff zone (1.4–2.0 dB) where the
+#     waterfall's curvature is highest and 0.05 dB differences between
+#     teams are meaningful. 0.25 dB up to the spec point (2.0→3.0 dB) so
+#     a decoder that almost-but-not-quite passes spec gets located, not
+#     just declared "failing". Tail (0.2–1.3 dB) stays at 0.1–0.2 dB —
+#     curve is steep there, no cliff structure to resolve.
+#   - BCH: 0.25 dB across the cliff zone (3.0–4.0 dB), 0.5 dB elsewhere,
+#     plus the pinned spec operating point at 7.6 dB. Replaces the
+#     uniform 1.0 dB grid which was below industry standard for
+#     committee/interop work (DVB-S2, 3GPP, CCSDS conventions sit at
+#     0.1–0.25 dB at the cliff).
+LDPC_GRID = (
+    # Tail (0.2 dB → 0.1 dB approaching cliff)
+    0.2,
+    0.4,
+    0.6,
+    0.8,
+    1.0,
+    1.1,
+    1.2,
+    1.3,
+    # Cliff zone — 0.05 dB resolution (1.4–2.0 dB inclusive)
+    1.4,
+    1.45,
+    1.5,
+    1.55,
+    1.6,
+    1.65,
+    1.7,
+    1.75,
+    1.8,
+    1.85,
+    1.9,
+    1.95,
+    2.0,
+    # Tail-to-spec (0.25 dB to the operating point)
+    2.25,
+    2.5,
+    2.75,
+    3.0,
+)
+BCH_GRID = (
+    2.0,
+    2.5,  # below cliff (0.5 dB)
+    3.0,
+    3.25,
+    3.5,
+    3.75,
+    4.0,  # cliff zone (0.25 dB)
+    4.5,
+    5.0,
+    6.0,  # above cliff (0.5–1.0 dB)
+    7.6,  # spec operating point
+)
 
 # Per-grid-point frames_per_seed override (BCH bumps at the operating point
 # for tighter CI on the verdict row, mirroring lunalink).
@@ -75,6 +127,16 @@ BCH_OPERATING_EB_N0 = 7.6
 # tighten the Wilson upper bound at FER=0 so the conformance claim
 # (`ci_fer_upper < 0.01`) doesn't depend on the slow-grid frame count.
 BCH_OPERATING_FRAMES_FACTOR = 10000 // 3000  # = 3, integer truncation of 10k/3k
+
+# Bump frame count across the LDPC cliff zone (1.4–2.0 dB inclusive).
+# Without the bump, the Wilson CI half-width on ~450 errors in 13M
+# bits is ±9% of the point estimate — visible as a non-smooth
+# waterfall at the cliff, even though it's well within the expected
+# Poisson noise envelope. 3× brings it to ±5%, smoothing the curve
+# without changing any verdict outcome.
+LDPC_CLIFF_FRAMES_FACTOR = 3
+LDPC_CLIFF_EB_N0_MIN = 1.4
+LDPC_CLIFF_EB_N0_MAX = 2.0
 
 CODES = {
     0: {
@@ -617,9 +679,15 @@ def sweep_one_grid_point(
     sigma = sigma_for_eb_n0(eb_n0_db, meta["rate"])
     sigma_sq = sigma * sigma
     pt = GridPoint(eb_n0_db=eb_n0_db)
-    # BCH bumps the operating point's frame count for tighter CI on the verdict.
+    # BCH bumps the operating point's frame count for tighter CI on the
+    # verdict. LDPC bumps the cliff zone (1.4–2.0 dB) where the curve
+    # would otherwise show visible Poisson noise on small error counts.
     if code_id == 0 and abs(eb_n0_db - BCH_OPERATING_EB_N0) < 1e-6:
         this_frames = frames_per_seed * BCH_OPERATING_FRAMES_FACTOR
+    elif (
+        code_id in (1, 2) and LDPC_CLIFF_EB_N0_MIN - 1e-6 <= eb_n0_db <= LDPC_CLIFF_EB_N0_MAX + 1e-6
+    ):
+        this_frames = frames_per_seed * LDPC_CLIFF_FRAMES_FACTOR
     else:
         this_frames = frames_per_seed
     for seed in SEEDS:
@@ -1042,6 +1110,40 @@ def probe_saturation_stress(
 # ─── Verdict computation per code ────────────────────────────────────────
 
 
+def _strict_monotone_first_crossing(
+    points: list[GridPoint], metric_attr: str, bar: float
+) -> float | None:
+    """Lowest Eb/N0 grid point such that this point AND every higher
+    grid point also passes (point estimate strictly below the bar).
+
+    The "first single point that passes" version of this metric is
+    fragile against Monte-Carlo noise — a single bad-codeword frame
+    above the cliff can produce a brief violation that makes the
+    reported cliff appear lower than the true monotone-pass region.
+    The strict-monotone definition walks down from the highest grid
+    point and stops at the last failing point, returning the next
+    higher grid point. Robust to MC noise, which is what cross-team
+    comparison needs.
+
+    Returns `None` when even the highest grid point fails (decoder
+    doesn't meet the bar anywhere on the grid).
+    """
+    if not points:
+        return None
+    by_eb = sorted(points, key=lambda p: p.eb_n0_db)
+    last_fail_idx = -1
+    for i, p in enumerate(by_eb):
+        if getattr(p, metric_attr) >= bar:
+            last_fail_idx = i
+    if last_fail_idx == -1:
+        # All points pass — cliff is at (or below) the lowest grid point.
+        return by_eb[0].eb_n0_db
+    if last_fail_idx + 1 >= len(by_eb):
+        # Even the highest grid point fails — no monotone-pass region.
+        return None
+    return by_eb[last_fail_idx + 1].eb_n0_db
+
+
 def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
     """LDPC verdict block.
 
@@ -1056,14 +1158,13 @@ def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
        coverage rather than letting a lucky zero-count claim PASS.
 
     2. **Cross-team comparison** (`first_bar_crossing_eb_n0_db`,
-       `margin_below_spec_db`) — at what Eb/N0 does the decoder first
-       achieve the bar (by point estimate), *regardless* of whether
-       that's in the spec's operating region? This is what
-       differentiates implementations: two cards that both PASS can sit
-       several dB apart on this axis, which is what
-       `perf-card leaderboard` ranks on. Point estimate is intentional
-       here — the CI upper would null out short-frame submissions and
-       lose discrimination across teams.
+       `margin_below_spec_db`) — what's the lowest Eb/N0 grid point
+       above which the decoder *stays* below the bar? This is the
+       strict-monotone definition: robust to single-frame Monte-Carlo
+       blips above the true cliff position. Point estimate (not CI
+       upper) is intentional here — using the CI upper would null this
+       out for short-frame submissions and lose discrimination across
+       teams.
     """
     in_band = [p for p in points if p.eb_n0_db >= LDPC_OPERATING_POINT_EB_N0_DB]
     in_band_passing = [p for p in in_band if p.ci_ber_upper < LDPC_VERDICT_BAR_BER]
@@ -1076,17 +1177,11 @@ def ldpc_verdict(points: list[GridPoint]) -> dict[str, Any]:
     else:
         return {}
 
-    # Comparison metric: lowest Eb/N0 anywhere on the waterfall where
-    # the point-estimate BER crosses the bar. May be lower than
-    # at_eb_n0_db. Uses point estimate (not CI upper) — see docstring.
-    all_passing = [p for p in points if p.ber < LDPC_VERDICT_BAR_BER]
-    if all_passing:
-        first = min(all_passing, key=lambda p: p.eb_n0_db)
-        first_eb_n0 = first.eb_n0_db
-        margin = anchor.eb_n0_db - first_eb_n0
-    else:
-        first_eb_n0 = None
-        margin = None
+    # Comparison metric (strict-monotone): lowest Eb/N0 grid point such
+    # that this point AND every higher grid point also pass the bar.
+    # Robust to MC noise — see _strict_monotone_first_crossing docstring.
+    first_eb_n0 = _strict_monotone_first_crossing(points, "ber", LDPC_VERDICT_BAR_BER)
+    margin = (anchor.eb_n0_db - first_eb_n0) if first_eb_n0 is not None else None
 
     return {
         "criterion": f"BER < {LDPC_VERDICT_BAR_BER:g} at Es/N0 >= 0 dB (CI upper)",
@@ -1117,14 +1212,9 @@ def sb1_verdict(points: list[GridPoint]) -> dict[str, Any]:
     if op is None:
         return {}
 
-    all_passing = [p for p in points if p.fer < SB1_VERDICT_BAR_FER]
-    if all_passing:
-        first = min(all_passing, key=lambda p: p.eb_n0_db)
-        first_eb_n0 = first.eb_n0_db
-        margin = SB1_OPERATING_POINT_EB_N0_DB - first_eb_n0
-    else:
-        first_eb_n0 = None
-        margin = None
+    # Comparison metric (strict-monotone): same definition as LDPC.
+    first_eb_n0 = _strict_monotone_first_crossing(points, "fer", SB1_VERDICT_BAR_FER)
+    margin = (SB1_OPERATING_POINT_EB_N0_DB - first_eb_n0) if first_eb_n0 is not None else None
 
     return {
         "criterion": f"FER < {SB1_VERDICT_BAR_FER:g} at Es/N0 >= 0 dB (CI upper)",
@@ -2295,28 +2385,31 @@ def _floor_for_log(x: float) -> float:
 
 
 def _wilson_bounds(p: float, ci: float, frames: int) -> tuple[float, float]:
-    """Return CI lower / upper bounds suitable for log-axis plotting.
+    """Return CI lower / upper bounds for a single point, for use as a
+    continuous CI band on a log-axis plot.
 
-    Wilson's half-width `ci` is centred on the empirical proportion `p`,
-    which goes to zero when no errors are observed. Naive `p - ci` is
-    then negative and gets clipped to the log floor, producing a
-    misleading "cliff" in the CI band. At p=0 we render the actual
-    one-sided Wilson upper bound (`z²/(n+z²)`, i.e. roughly 2× the
-    symmetric half-width) for the high side; otherwise the usual ± `ci`
-    around `p`.
+    At `p > 0` returns `(p − ci, p + ci)` clipped to the log floor.
+    At `p == 0` returns `(upper, upper)` — a zero-width band collapsed
+    to the one-sided Wilson 95% upper bound. The zero-width-at-zero
+    convention keeps `fill_between` continuous across the full grid:
+    the band visually narrows down to a thin line at the upper bound
+    where no errors were observed, rather than abruptly truncating
+    or sprawling across the log floor.
+
+    Companion downward-triangle markers (see `_draw_upper_limit_caps`)
+    make the upper-limit nature of the zero-error points explicit
+    alongside the collapsed band.
     """
     if frames <= 0:
         return 1e-7, 1.5
     if p == 0.0:
-        # True one-sided 95% upper bound — `ci` (half-width) is only
-        # half of this at p=0, so don't reuse it here.
-        upper = wilson_upper(0, frames)
-        return 1e-7, max(upper, 1e-7)
+        upper = max(wilson_upper(0, frames), 1e-7)
+        return upper, upper  # zero-width band collapses to upper-bound line
     return max(p - ci, 1e-7), min(p + ci, 1.5)
 
 
 def _ci_band_arrays(wf: list[dict[str, Any]]) -> tuple[list[float], list[float]]:
-    """Vector form of _wilson_bounds across a waterfall."""
+    """Vector form of _wilson_bounds across a FER waterfall."""
     los: list[float] = []
     his: list[float] = []
     for p in wf:
@@ -2326,27 +2419,108 @@ def _ci_band_arrays(wf: list[dict[str, Any]]) -> tuple[list[float], list[float]]
     return los, his
 
 
+def _fer_zero_err_flags(wf: list[dict[str, Any]]) -> list[bool]:
+    """True at grid points where no frame errors were observed."""
+    return [p.get("frame_errors", 0) == 0 for p in wf]
+
+
+def _ber_ci_band_arrays(
+    wf: list[dict[str, Any]],
+) -> tuple[list[float], list[float], list[bool]]:
+    """Vector Wilson bounds across a BER waterfall + zero-error flag."""
+    los: list[float] = []
+    his: list[float] = []
+    zero_err: list[bool] = []
+    for p in wf:
+        ber = p.get("ber", 0.0)
+        ci_ber = p.get("ci_ber", 0.0)
+        total_bits = p.get("total_bits", 0)
+        lo, hi = _wilson_bounds(ber, ci_ber, total_bits)
+        los.append(lo)
+        his.append(hi)
+        zero_err.append(p.get("bit_errors", 0) == 0)
+    return los, his, zero_err
+
+
+def _draw_upper_limit_caps(
+    ax,
+    ebs: list[float],
+    his: list[float],
+    zero_err: list[bool],
+    *,
+    color: str,
+    label: str | None = None,
+) -> None:
+    """Drop downward triangles at zero-observation grid points, marking
+    the one-sided Wilson 95% upper bound. Standard convention for
+    upper limits in scientific plots — makes the "true rate is
+    somewhere below this" interpretation explicit alongside the
+    continuous CI band (which collapses to a thin line at these
+    points)."""
+    cap_xs = [eb for eb, z in zip(ebs, zero_err, strict=False) if z]
+    cap_ys = [hi for hi, z in zip(his, zero_err, strict=False) if z]
+    if cap_xs:
+        ax.scatter(
+            cap_xs,
+            cap_ys,
+            marker="v",
+            s=40,
+            color=color,
+            edgecolors=color,
+            zorder=5,
+            label=label,
+        )
+
+
 def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
-    """Plot one LDPC subframe's FER + BER waterfall."""
+    """Plot one LDPC subframe's FER + BER waterfall.
+
+    Two continuous Wilson 95% CI bands — one on FER (blue, primary)
+    and one on BER (orange, the verdict metric). Both bands span the
+    full grid; at zero-error points the band collapses to its
+    upper-bound line (zero width), so the envelope visually narrows
+    into a thin upper-limit envelope rather than truncating. Downward
+    triangles ▼ mark the upper bound at zero-error points explicitly,
+    on the BER metric (which is what the verdict tests).
+    """
     wf = sub["waterfall"]
     ebs = [p["eb_n0_db"] for p in wf]
     fers = [_floor_for_log(p["fer"]) for p in wf]
     bers = [_floor_for_log(p.get("ber", 0.0)) for p in wf]
     fers_lo, fers_hi = _ci_band_arrays(wf)
+    ber_lo, ber_hi, ber_zero_err = _ber_ci_band_arrays(wf)
 
+    # FER band — continuous, blue. This is what users expect to see
+    # on an LDPC waterfall.
     ax.fill_between(
         ebs,
         fers_lo,
         fers_hi,
-        color=RENDER_PALETTE["ci_band"],
-        alpha=0.35,
+        color=RENDER_PALETTE["fer"],
+        alpha=0.18,
+        linewidth=0,
         label="FER 95% CI",
     )
-    ax.semilogy(
-        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.5, markersize=7, label="FER"
+    # BER band — continuous, orange (faint, since FER is the more
+    # prominent curve and we don't want two competing fills).
+    ax.fill_between(
+        ebs,
+        ber_lo,
+        ber_hi,
+        color=RENDER_PALETTE["ber"],
+        alpha=0.18,
+        linewidth=0,
+        label="BER 95% CI",
+    )
+    # Upper-limit caps on BER (the verdict metric) at zero-error points.
+    _draw_upper_limit_caps(
+        ax, ebs, ber_hi, ber_zero_err, color=RENDER_PALETTE["ber"], label="BER 95% upper"
     )
     ax.semilogy(
-        ebs, bers, "s--", color=RENDER_PALETTE["ber"], linewidth=1.5, markersize=5, label="BER"
+        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.0, markersize=6, label="FER"
+    )
+    ax.semilogy(
+        ebs, bers, "s-", color=RENDER_PALETTE["ber"], linewidth=2.0, markersize=6, label="BER"
     )
 
     ax.axhline(
@@ -2434,17 +2608,32 @@ def _plot_ldpc_waterfall(ax, sub: dict[str, Any], title: str) -> None:
 
 
 def _plot_sb1_waterfall(ax, sb1: dict[str, Any]) -> None:
-    """Plot SB1/BCH FER waterfall."""
+    """Plot SB1/BCH FER waterfall.
+
+    Continuous Wilson 95% CI band across the full grid. At zero-error
+    points the band collapses to its upper-bound line, and a downward
+    triangle ▼ marks the Wilson upper bound explicitly. No truncation.
+    """
     wf = sb1["waterfall"]
     ebs = [p["eb_n0_db"] for p in wf]
     fers = [_floor_for_log(p["fer"]) for p in wf]
     fers_lo, fers_hi = _ci_band_arrays(wf)
+    fer_zero_err = _fer_zero_err_flags(wf)
 
     ax.fill_between(
-        ebs, fers_lo, fers_hi, color=RENDER_PALETTE["ci_band"], alpha=0.35, label="FER 95% CI"
+        ebs,
+        fers_lo,
+        fers_hi,
+        color=RENDER_PALETTE["fer"],
+        alpha=0.22,
+        linewidth=0,
+        label="FER 95% CI",
+    )
+    _draw_upper_limit_caps(
+        ax, ebs, fers_hi, fer_zero_err, color=RENDER_PALETTE["fer"], label="FER 95% upper"
     )
     ax.semilogy(
-        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.5, markersize=7, label="FER"
+        ebs, fers, "o-", color=RENDER_PALETTE["fer"], linewidth=2.0, markersize=6, label="FER"
     )
 
     ax.axhline(

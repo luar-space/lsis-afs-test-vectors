@@ -144,9 +144,16 @@ Per-code Eb/N0 grids and default frame counts:
 
 | code_id | Name | k | n | rate R | Eb/N0 grid (dB) | Default frames/seed |
 |---|---|---|---|---|---|---|
-| 0 | **SB1** (BCH) | 9 | 52 | 9/52 ≈ 0.173 | 2.0, 3.0, 4.0, 5.0, 6.0, **7.6** | 3000 (10000 at 7.6 dB op point) |
-| 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0 | 5000 |
-| 2 | **SF3** (LDPC, applies to SF3+SF4) | 870 | 1740 | 1/2 | same as SF2 | 5000 |
+| 0 | **SB1** (BCH) | 9 | 52 | 9/52 ≈ 0.173 | 2.0, 2.5, **3.0, 3.25, 3.5, 3.75, 4.0**, 4.5, 5.0, 6.0, **7.6** | 3000 (10000 at 7.6 dB op point) |
+| 1 | **SF2** (LDPC) | 1200 | 2400 | 1/2 | 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, **1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0**, 2.25, 2.5, 2.75, 3.0 | 5000 (15000 in cliff zone 1.4–2.0 dB) |
+| 2 | **SF3** (LDPC, applies to SF3+SF4) | 870 | 1740 | 1/2 | same as SF2 | 5000 (15000 in cliff zone 1.4–2.0 dB) |
+
+The LDPC grid uses **0.05 dB** spacing across the cliff zone (1.4–2.0 dB,
+bold above) — publication-grade resolution matching DVB-S2, 3GPP TR
+38.802, and IEEE-published LDPC reference curves. The BCH grid uses
+**0.25 dB** across the cliff zone (3.0–4.0 dB, bold). Outside the cliff
+zones the grid is coarser (0.2–1.0 dB) because the curves are steep and
+finer resolution would not reveal additional structure.
 
 Operating-point Eb/N0 derives from Es/N0 via the code rate:
 `Es/N0 [dB] = Eb/N0 [dB] + 10·log10(R)`, so
@@ -205,7 +212,7 @@ ranking implementations:
 
 | Field | Meaning |
 |---|---|
-| `first_bar_crossing_eb_n0_db` | Lowest Eb/N0 *on the grid* where the **point estimate** crosses the bar, ignoring whether that Eb/N0 sits in the spec's operating region. Point estimate (not CI upper) is intentional here — using the CI upper would null this out for short-frame submissions and lose discrimination. |
+| `first_bar_crossing_eb_n0_db` | Lowest Eb/N0 grid point such that **this point AND every higher grid point** also passes the bar (point-estimate metric, strict-monotone). Robust to single-frame Monte-Carlo noise blips above the true cliff — a fragile "first-individual-point" definition can be 0.05–0.10 dB lower than the strict-monotone version when MC noise produces a brief violation above the true monotone-pass region. Point estimate (not CI upper) is intentional here — using the CI upper would null this out for short-frame submissions and lose discrimination across teams. |
 | `margin_below_spec_db` | Mathematically derived: `at_eb_n0_db − first_bar_crossing_eb_n0_db`. Since `at_eb_n0_db` is constant per code (3.0 dB for LDPC, 7.6 dB for SB1), this field is a literal restatement of the cliff in a different reference frame — not a second independent metric. |
 
 `perf-card leaderboard` ranks cards by `first_bar_crossing_eb_n0_db`
@@ -213,16 +220,16 @@ ascending (lower = better implementation). The PASS/FAIL outcome stays
 as the conformance gate; the cliff position is the discriminator.
 
 **Grid resolution caveat.** `first_bar_crossing_eb_n0_db` is reported
-to grid resolution — not interpolated. The LDPC grid has 0.1 dB
-spacing across the entire cliff region (1.0–2.0 dB) and 0.2 dB at
-1.4→1.6; the BCH grid has 1.0 dB spacing throughout. Two
-implementations whose true cliffs differ by less than the local grid
-step typically report the same value (tied at the grid's resolution);
-a 0.1 dB reported difference on the LDPC grid is real; a 1.0 dB
-reported difference on the BCH grid may overstate the true gap by up
-to a grid step. Tied cards on the leaderboard are indistinguishable
-at the grid's resolution — no extra CI-overlap test is applied to a
-derived discrete quantity.
+to grid resolution — not interpolated. The LDPC grid has **0.05 dB**
+spacing across the cliff zone (1.4–2.0 dB) and 0.25 dB up to the spec
+point (2.0→3.0); the BCH grid has **0.25 dB** across the cliff zone
+(3.0–4.0 dB) and 0.5–1.0 dB elsewhere. Two implementations whose true
+cliffs differ by less than the local grid step typically report the
+same value (tied at the grid's resolution). A 0.05 dB reported
+difference on the LDPC grid is real; a 0.25 dB reported difference on
+the BCH grid is real. Tied cards on the leaderboard are
+indistinguishable at the grid's resolution — no extra CI-overlap test
+is applied to a derived discrete quantity.
 
 The leaderboard also surfaces the **frame count at the cliff row**
 (`n@cliff` column) — readers should treat low-frame submissions
@@ -306,7 +313,9 @@ implement the production version without comments.
           "spec_ref": "LSIS V1.0 §2.4.3.1.2"
         },
         "frames_per_seed": 5000,
-        "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0],
+        "eb_n0_grid_db": [0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2, 1.3,
+                          1.4, 1.45, 1.5, 1.55, 1.6, 1.65, 1.7, 1.75, 1.8, 1.85, 1.9, 1.95, 2.0,
+                          2.25, 2.5, 2.75, 3.0],
         "waterfall": [
           {"eb_n0_db": 0.2, "fer": 0.9607, "ber": 0.479,
            "ci_fer": 0.0031, "ci_ber": 0.00023,
@@ -359,7 +368,7 @@ implement the production version without comments.
     "frame_error_definition":
       "decoded FID != transmitted OR decoded TOI != transmitted",
     "frames_per_seed_default": 5000,   // per-seed; 3× at the operating point
-    "eb_n0_grid_db": [2.0, 3.0, 4.0, 5.0, 6.0, 7.6],
+    "eb_n0_grid_db": [2.0, 2.5, 3.0, 3.25, 3.5, 3.75, 4.0, 4.5, 5.0, 6.0, 7.6],
     "waterfall": [
       {"eb_n0_db": 2.0, "fer": 0.023, "ci_fer": 0.0024,
        "frame_errors": 352, "frames": 15000}
