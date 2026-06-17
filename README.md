@@ -48,6 +48,9 @@ lsis-afs-test-vectors/
 ├── signals/                         # Level 3 — 10 × signal_*_12s.iq.gz      ✅ shipped (~221 MB total)
 │                                    # Level 4 — no content dir; see references/pocketsdr-afs/
 ├── parsed/                          # Level 5 — 7 × parsed_frame_*.json     ✅ shipped (~30 KB)
+├── workshop/                        # Goonhilly workshop baseline bundle    ✅ shipped (~16 MB)
+│                                    #   codes.txt + frame.bin + 5 × .iq32.gz
+│                                    #   (workshop programme shape — supersedes interop PDF for the workshop CI)
 ├── references/                      # bundled oracles, grows with future levels
 │   ├── annex-3/                     #   L1 normative — 3 × .txt + README
 │   ├── lans-afs-sim/                #   transmit-side oracle (BSD-2-Clause, © Ebinuma)
@@ -129,7 +132,31 @@ produced by the lunalink reference decoder running through the harness
 at 5000 frames/seed (~10 minutes, 9 parallel workers). It's the
 canonical comparison target until other teams submit their cards.
 
-## Current release — `v0.7.0` (Levels 1–5 + FEC components + perf-card)
+## Workshop baseline bundle (new in `v0.8.0`)
+
+The [`workshop/`](./workshop/) directory ships reference artefacts in the
+shape mandated by the **ESA-CCSDS LSIS-AFS mid-project workshop** at
+Goonhilly Earth Station (June 2026). The workshop programme is the
+authoritative format for Day-1 / Day-2 file exchange and **supersedes the
+older `references/interoperability.pdf` shapes** for the workshop CI —
+the headered, multi-section, 10.23 MHz formats in `codes/`, `frames/`,
+`signals/` remain the target for the final August submission.
+
+Key shape changes:
+
+| Workshop baseline | Interop-PDF shape |
+|---|---|
+| single `codes.txt`, 210 × 512 hex, Gold-only | per-PRN `.hex` with Gold + Weil P + Weil T + secondaries |
+| 6000-byte `frame.bin`, no header | 64-byte LSISAFS header + 6000-byte payload |
+| raw `signal_*.iq32` at 1.023 MHz, AFS-I only (Q = 0.0) | 128-byte LSISIQ header + 10.23 MHz with AFS-Q pilot |
+
+All `workshop/` artefacts are produced by the **LunaLink CLI** —
+`lunalink generate-codes`, `lunalink encode --format frame|iq32` — and
+verified end-to-end against the existing Annex 3, LANS-AFS-SIM, and
+polarity-invariant oracles. See [`workshop/README.md`](./workshop/README.md)
+for the reproduction commands.
+
+## Current release — `v0.8.0` (Levels 1–5 + FEC components + perf-card + workshop bundle)
 
 > Versioning follows a staged-drop scheme: 0.x adds one level per minor
 > bump; 1.0.0 is reserved for the feature-complete release with all five

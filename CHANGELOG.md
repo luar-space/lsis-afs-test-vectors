@@ -18,10 +18,64 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 | 0.4.0     | + Level 4 |
 | **0.5.0** | + Level 5 (feature-complete; this release) |
 | **0.6.0** | + Phase-3 FEC component vectors (BCH/CRC/LDPC/interleaver) |
+| **0.7.0** | + Decoder Performance Card harness (BCH/LDPC BER/FER grids) |
+| **0.8.0** | + Workshop baseline bundle (Goonhilly interop, 1.023 MHz AFS-I) |
 | **1.0.0** | first stable — all five levels verified, formats frozen |
 
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
+
+## [0.8.0] — 2026-06-15
+
+Workshop baseline bundle — reference artefacts in the shape mandated by the
+**ESA-CCSDS LSIS-AFS mid-project workshop** at Goonhilly Earth Station,
+authoritative for Day 1 / Day 2 file exchange (workshop programme supersedes
+`references/interoperability.pdf` for the workshop CI; the older shapes
+remain the target for the final August submission).
+
+Differences vs the interop-PDF shapes shipped in `codes/`, `frames/`,
+`signals/`:
+
+- `codes.txt` — single 210-line file, Gold codes only (interop PDF: 210 per-PRN
+  files with Gold + Weil P + Weil T + 4 secondaries).
+- `frame.bin` — exactly 6000 bytes, no header (interop PDF: 64-byte LSISAFS
+  header + 6000 bytes of data).
+- `signal_*.iq32` — raw float32 LE, 1.023 MHz (1 sample per chip), AFS-I on
+  I, **Q = 0.0** (interop PDF: 128-byte LSISIQ header + 10.23 MHz with full
+  AFS-Q pilot). Per the admin's workshop-thread clarification, the workshop
+  baseline is AFS-I-only.
+
+### Added
+
+- `workshop/` — five-artefact reference bundle, all produced by the
+  LunaLink CLI (`lunalink generate-codes`, `lunalink encode --format
+  frame|iq32`):
+  - `codes.txt` (107,730 B)
+  - `frame.bin` (6,000 B) — canonical input PRN=1, FID=0, TOI=42, WN=100,
+    ITOW=250, CED=zeros
+  - `signal_canonical.iq32.gz` (~3.3 MB) — same canonical input
+  - `signal_l3_tc1.iq32.gz` … `signal_l3_tc4.iq32.gz` — four L3
+    cross-decode cases per workshop programme; TC2 is byte-identical to
+    the canonical signal (same params)
+  - `README.md` — bundle layout, reproduction commands, validation
+    lineage
+- LunaLink CLI (lives in lunalink, not this repo): three subcommands
+  produce all five artefacts above with one command each, deterministically.
+
+### Validation lineage
+
+No new oracle in this release. Every artefact is verified against an
+existing oracle:
+
+- `codes.txt`: all 210 lines byte-equal to Annex 3
+  `006_GoldCode2046hex210prns.txt`.
+- `frame.bin`: same `frame_build` pathway as the LANS-AFS-SIM-validated
+  frames in `frames/`; byte-equal to a header-stripped `frame_message_1.bin`
+  for the all-zeros case.
+- `signal_*.iq32`: each of the 12,276,000 I samples satisfies
+  `I[k] = (1 − 2·sym[e]) · (1 − 2·gold[k mod 2046])` exactly — same
+  polarity invariant used by `validate.py check-signals` for L1+L2 chain
+  verification. Q is strictly `0.0`.
 
 ## [0.6.0] — 2026-05-22
 
