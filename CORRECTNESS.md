@@ -144,9 +144,9 @@ interop bench.
 
 ## Reproducing from scratch
 
-The generator that produced these vectors is part of the LuarSpace reference
-implementation and is not yet public. Every code in this package was produced
-by:
+The generator that produced these vectors is part of LunaLink, the LuarSpace
+reference implementation, which is not yet public. Every code in this package
+was produced by:
 
 - **Gold code (2046 chips):** the indexed Gold-code construction of LNIS AD1
   Volume A — same taps, same initial conditions, same truncation as specified.
@@ -156,8 +156,9 @@ by:
   assignment table; no MSB padding.
 - **Secondary codes:** literal 4-bit sequences from Annex 3, Table 2.
 
-The Apache-2.0 reference implementation is scheduled for public release at
-Phase 2 of the competition timeline.
+LunaLink checks its own output against each tagged release of this
+repository with the `diff-*` commands (`task conformance` in LunaLink), the
+same way any other implementation would.
 
 ---
 
@@ -419,9 +420,8 @@ For manual reproduction or debugging, the same steps are documented
 in
 [`references/lans-afs-sim/harnesses/README.md`](./references/lans-afs-sim/harnesses/README.md).
 
-This rebuilds the *oracle*, not the LuarSpace vectors themselves —
-the public Apache-2.0 release of the LuarSpace generator is scheduled
-for Phase 2 of the competition timeline.  Until then, the LANS-AFS-SIM
+This rebuilds the *oracle*, not the LuarSpace vectors themselves; the
+LuarSpace generator is not yet public.  Until it is, the LANS-AFS-SIM
 agreement at the encoded-bit level is the external evidence that the
 LuarSpace vectors in `frames/` are correct.
 
@@ -857,17 +857,19 @@ debuggable on first reading.
 
 ### Disk space
 
-`signals/` adds ~221 MB to the repository.  If you only need L1 / L2,
-sparse-checkout or shallow-clone them:
+`signals/` adds ~221 MB to the repository.  If you don't need the L3
+signals, a sparse clone skips them:
 
 ```bash
-git clone --filter=blob:none https://github.com/luar-space/lsis-afs-test-vectors
+git clone --filter=blob:none --sparse https://github.com/luar-space/lsis-afs-test-vectors
 cd lsis-afs-test-vectors
-git sparse-checkout init --cone
-git sparse-checkout set codes frames inputs references validate.py manifest.json
+git sparse-checkout set codes fec frames inputs parsed references
 ```
 
-`signals/` then stays unfetched until you opt in.
+`signals/` then stays unfetched until you add it with
+`git sparse-checkout add signals`.  Root files such as `validate.py` and
+`manifest.json` are always checked out; `verify-manifest` reports the
+skipped signals as missing and `check-signals` needs them.
 
 ## Reproducing from scratch
 
@@ -1173,7 +1175,7 @@ Export Format" template (page 3-4).  The competition's Level 5
 
 This package fills L5 by shipping seven parsed JSONs under `parsed/`,
 produced by the **LunaLink reference implementation** (the LuarSpace
-generator, scheduled for public release at Phase 2) running its full RX
+generator, not yet public) running its full RX
 path on each `frames/frame_*.bin`: sync detect → BCH(51,8) on SB1 →
 deinterleave → LDPC(1/2) on SB2/SB3/SB4 → CRC-24Q verify → field-level
 parse.

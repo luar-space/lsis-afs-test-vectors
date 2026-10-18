@@ -23,6 +23,22 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
 
+## [0.6.2] — 2026-10-18
+
+Documentation fix only.  No vector, reference or `manifest.json` file
+changed; every file is byte-identical to 0.6.1.
+
+### Fixed
+
+- CORRECTNESS.md carried the same failing sparse-checkout commands that
+  0.6.1 fixed in the README; it now has the working ones, and says how
+  to fetch `signals/` later.
+- README and CORRECTNESS.md said LunaLink, the generator, would be
+  released "at Phase 2 of the competition timeline" or "ahead of the
+  competition workshop".  They now say it is not yet public, and that
+  LunaLink checks itself against each tagged release with the `diff-*`
+  commands.
+
 ## [0.6.1] — 2026-10-18
 
 Documentation fix only.  No vector, reference or `manifest.json` file
