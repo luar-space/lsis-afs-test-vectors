@@ -23,6 +23,20 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
 
+## [0.6.1] — 2026-10-18
+
+Documentation fix only.  No vector, reference or `manifest.json` file
+changed; every file is byte-identical to 0.6.0.
+
+### Fixed
+
+- README: the sparse-checkout commands for skipping `signals/` failed.
+  `git sparse-checkout set` in cone mode accepts directories only, so
+  listing `validate.py` and `manifest.json` stopped it, and without
+  `--sparse` the clone had already downloaded `signals/`.  The commands
+  now clone with `--sparse` and list every directory except `signals/`,
+  and the README says which checks need `signals/`.
+
 ## [0.6.0] — 2026-05-22
 
 Phase-3 **FEC component test vectors** — isolated, full, byte-exact-diffable
