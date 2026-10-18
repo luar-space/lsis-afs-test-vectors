@@ -221,15 +221,19 @@ original data with BER < 10⁻ⁿ* — is closed at L4 (see below) by
 running PocketSDR-AFS over every shipped L3 signal and confirming
 byte-exact recovery of the corresponding L2 frame's payload.
 
-**Repository size.** `signals/` adds ~221 MB. If you only need L1/L2,
-sparse-checkout to skip:
+**Repository size.** `signals/` adds ~221 MB. If you don't need the L3
+signals, a sparse clone skips them:
 
 ```bash
-git clone --filter=blob:none https://github.com/luar-space/lsis-afs-test-vectors
+git clone --filter=blob:none --sparse https://github.com/luar-space/lsis-afs-test-vectors
 cd lsis-afs-test-vectors
-git sparse-checkout init --cone
-git sparse-checkout set codes frames inputs references validate.py manifest.json
+git sparse-checkout set codes fec frames inputs parsed references
 ```
+
+Files in the repository root, `validate.py` and `manifest.json` among
+them, are always checked out.  On a sparse checkout `verify-manifest`
+reports the files under `signals/` as missing and `check-signals` fails
+for want of them; every other `check-*` command works.
 
 ### Level 4 — cross-decode (20 outputs, ~88 KB)
 
