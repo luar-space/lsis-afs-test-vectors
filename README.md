@@ -497,10 +497,11 @@ the Annex 3 bit-exact match on `codes_prn062.hex` proves it.
 
 ## How this package is generated
 
-The vectors in each drop are the output of the export scripts of LunaLink,
-the `luar-space` reference implementation of LSIS-AFS, which is not yet public.
-LunaLink is held to this repository like any other implementation: it checks
-its own output against each tagged release with the `diff-*` commands above.
+The vectors in each drop are the output of the export scripts
+(`scripts/export_test_vectors_*.py`) of [LunaLink](https://github.com/luar-space/lunalink), the `luar-space` reference
+implementation of LSIS-AFS.  LunaLink is held to this repository like any
+other implementation: its `task conformance` checks its own output against a
+pinned release with the `diff-*` commands above, in CI.
 
 If a particular vector disagrees with your implementation, please open an
 issue. We'd rather catch it here than at the interop bench.

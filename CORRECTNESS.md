@@ -144,9 +144,9 @@ interop bench.
 
 ## Reproducing from scratch
 
-The generator that produced these vectors is part of LunaLink, the LuarSpace
-reference implementation, which is not yet public. Every code in this package
-was produced by:
+The generator that produced these vectors is part of [LunaLink](https://github.com/luar-space/lunalink), the
+LuarSpace reference implementation (Apache-2.0); `scripts/export_test_vectors_l1.py`
+writes this level.  Every code in this package was produced by:
 
 - **Gold code (2046 chips):** the indexed Gold-code construction of LNIS AD1
   Volume A — same taps, same initial conditions, same truncation as specified.
@@ -420,10 +420,10 @@ For manual reproduction or debugging, the same steps are documented
 in
 [`references/lans-afs-sim/harnesses/README.md`](./references/lans-afs-sim/harnesses/README.md).
 
-This rebuilds the *oracle*, not the LuarSpace vectors themselves; the
-LuarSpace generator is not yet public.  Until it is, the LANS-AFS-SIM
-agreement at the encoded-bit level is the external evidence that the
-LuarSpace vectors in `frames/` are correct.
+This rebuilds the *oracle*, not the LuarSpace vectors themselves; those
+come from [LunaLink](https://github.com/luar-space/lunalink)'s `scripts/export_test_vectors_l2.py`.  The LANS-AFS-SIM
+agreement at the encoded-bit level is the evidence, independent of LunaLink,
+that the vectors in `frames/` are correct.
 
 ---
 
@@ -873,11 +873,10 @@ skipped signals as missing and `check-signals` needs them.
 
 ## Reproducing from scratch
 
-The generator that produced these vectors is part of the LuarSpace
-reference implementation and is not yet public; the public Apache-2.0
-release is scheduled for Phase 2 of the competition timeline (same
-status as the L1/L2 generators).  In the meantime, the **receive-side
-closure** at L4 (PocketSDR-AFS decoding our signals back to the shipped
+The generator that produced these vectors is part of [LunaLink](https://github.com/luar-space/lunalink), the
+LuarSpace reference implementation; `scripts/export_test_vectors_l3.py`
+writes this level from the shipped L2 frames.  Independently of LunaLink,
+the **receive-side closure** at L4 (PocketSDR-AFS decoding our signals back to the shipped
 L2 frame bytes — see next chapter) is externally-verifiable evidence
 that the L3 content is correct end-to-end.
 
@@ -1174,8 +1173,8 @@ Export Format" template (page 3-4).  The competition's Level 5
 > calculated identically; All message type fields parsed correctly.
 
 This package fills L5 by shipping seven parsed JSONs under `parsed/`,
-produced by the **LunaLink reference implementation** (the LuarSpace
-generator, not yet public) running its full RX
+produced by the **[LunaLink](https://github.com/luar-space/lunalink) reference implementation** (the LuarSpace
+generator) running its full RX
 path on each `frames/frame_*.bin`: sync detect → BCH(51,8) on SB1 →
 deinterleave → LDPC(1/2) on SB2/SB3/SB4 → CRC-24Q verify → field-level
 parse.

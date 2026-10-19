@@ -23,6 +23,16 @@ prescribed by the competition. The 0.x series tracks that staged build-up:
 Patch versions (e.g. 0.1.1, 0.2.1, 0.2.2) carry corrections or additional
 verification artefacts for an already-shipped level without adding new ones.
 
+## [Unreleased]
+
+### Changed
+
+- LunaLink, the generator, is now public at
+  <https://github.com/luar-space/lunalink>.  README and CORRECTNESS.md link
+  to it and name the export script behind each level, instead of saying it
+  is not yet public.  This also removes a "Phase 2 of the competition
+  timeline" passage in the Level 3 chapter that 0.6.2 missed.
+
 ## [0.6.2] — 2026-10-18
 
 Documentation fix only.  No vector, reference or `manifest.json` file
